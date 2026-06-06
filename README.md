@@ -5,7 +5,7 @@ AI-powered alcohol label verification prototype for the Alcohol and Tobacco Tax 
 ## Requirements
 
 - Docker and Docker Compose
-- NVIDIA GPU strongly recommended (qwen2.5vl:3b runs in ~3-5s on RTX 4090; ~15s on RTX 3070 Mobile)
+- NVIDIA GPU strongly recommended (qwen2.5vl:3b runs in ~1.5s on RTX 4090; ~15s on RTX 3070 Mobile)
 - For GPU support: [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) must be installed and configured
 
 ## Quick Start
@@ -14,12 +14,11 @@ AI-powered alcohol label verification prototype for the Alcohol and Tobacco Tax 
 git clone <repo-url>
 cd <repo>
 
-# Start services in background
+# Build and start all services — pulls the vision model automatically (~2GB, first run only)
 docker compose up --build -d
-
-# Pull the vision model (one-time, ~2GB — takes a few minutes)
-docker compose exec ollama ollama pull qwen2.5vl:3b
 ```
+
+Wait for the `model-puller` service to finish (check with `docker compose logs model-puller`). The `api` service starts automatically once the model is ready.
 
 Open **http://localhost:8000**
 

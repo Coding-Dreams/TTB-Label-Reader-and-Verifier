@@ -17,6 +17,18 @@ services:
       retries: 10
       start_period: 30s
 
+  model-puller:
+    image: ollama/ollama
+    volumes:
+      - ollama_data:/root/.ollama
+    entrypoint: ["/bin/sh", "-c", "ollama pull qwen2.5vl:3b"]
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: "no"
+
   api:
     build: .
     ports:
@@ -28,6 +40,8 @@ services:
     depends_on:
       ollama:
         condition: service_healthy
+      model-puller:
+        condition: service_completed_successfully
 
 volumes:
   ollama_data:
