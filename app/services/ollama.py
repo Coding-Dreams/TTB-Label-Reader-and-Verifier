@@ -29,10 +29,10 @@ Required JSON format:
   "class_type": "string or null",
   "alcohol_content": "string or null",
   "net_contents": "string or null",
+  "contains_sulfites": "string or null",
   "producer_name_address": "string or null",
   "country_of_origin": "string or null",
-  "government_warning": "string or null",
-  "contains_sulfites": "string or null"
+  "government_warning": "string or null"
 }
 
 Rules:
@@ -41,10 +41,10 @@ Rules:
 - class_type: the beverage category as printed (e.g. "Straight Rye Whisky", "American Red Wine", "Rum with Coconut Liqueur") — NOT the brewery or winery name
 - alcohol_content: the ABV percentage as printed (e.g. "45% ALC/VOL", "13% BY VOL")
 - net_contents: the volume as printed (e.g. "750 ML", "1 PINT")
+- contains_sulfites: search ALL panels for any sulfite statement (e.g. "CONTAINS SULFITES", "Contains Sulfating Agents"); return the exact text if found, null if absent
 - producer_name_address: the producer, bottler, or importer name and address as printed
 - country_of_origin: the country name only (e.g. "Canada", "United States") — NOT a city or US state
-- government_warning: the COMPLETE warning text EXACTLY as printed, including the "GOVERNMENT WARNING:" heading if present
-- contains_sulfites: the sulfite declaration exactly as printed (e.g. "CONTAINS SULFITES"), or null if not present"""
+- government_warning: the COMPLETE warning text EXACTLY as printed, including the "GOVERNMENT WARNING:" heading if present"""
 
 
 def _encode_image(image_path: Path) -> str:
@@ -164,5 +164,17 @@ def _postprocess(data: dict) -> dict:
     gw = data.get("government_warning")
     if gw and not gw.upper().lstrip().startswith("GOVERNMENT WARNING"):
         data["government_warning"] = "GOVERNMENT WARNING: " + gw.strip()
+
+    # Fallback: if model didn't populate contains_sulfites, scan other fields for
+    # sulfite mentions (model may misattribute the statement to a nearby field)
+    if not data.get("contains_sulfites"):
+        for val in data.values():
+            if isinstance(val, str) and "sulfite" in val.lower():
+                for segment in re.split(r"[\n;]", val):
+                    if "sulfite" in segment.lower():
+                        data["contains_sulfites"] = segment.strip()
+                        break
+                if data.get("contains_sulfites"):
+                    break
 
     return data
