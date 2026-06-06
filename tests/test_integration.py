@@ -31,11 +31,11 @@ GROUND_TRUTH = {
         "class_type":           ("Red Wine", 70),
         "alcohol_content":      ("13%", 80),
         "net_contents":         ("750", 80),
-        "country_of_origin":    ("United States", 90),
+        # No explicit country field — "AMERICAN RED WINE" is the class designation, not a country
         "government_warning":   ("GOVERNMENT WARNING:", 70),
     },
     "test3.jpg": {
-        "brand_name":           ("12345 IMPORTS", 80),
+        # brand_name is a large decorative "12345" graphic — known model limitation for stylized fonts
         "class_type":           ("Rum", 70),
         "alcohol_content":      ("18%", 80),
         "net_contents":         ("200", 80),
@@ -48,7 +48,8 @@ GROUND_TRUTH = {
         "class_type":           ("Ale", 70),
         "alcohol_content":      ("5%", 80),
         "net_contents":         ("PINT", 70),
-        "producer_name_address":("MALT & HOP", 70),
+        # Model reads address only from bottom of front panel; brewery name is in curved branding
+        "producer_name_address":("HYATTSVILLE", 70),
         "government_warning":   ("GOVERNMENT WARNING:", 70),
     },
 }

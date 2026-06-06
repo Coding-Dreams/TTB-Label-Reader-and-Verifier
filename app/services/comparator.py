@@ -31,6 +31,7 @@ def check_fuzzy_field(
     extracted: Optional[str],
     submitted: Optional[str],
     threshold: int,
+    partial: bool = False,
 ) -> FieldResult:
     if extracted is None:
         return FieldResult(
@@ -46,7 +47,8 @@ def check_fuzzy_field(
             extracted_value=extracted,
             submitted_value=None,
         )
-    score = fuzz.ratio(extracted.lower().strip(), submitted.lower().strip())
+    fn = fuzz.partial_ratio if partial else fuzz.ratio
+    score = fn(extracted.lower().strip(), submitted.lower().strip())
     if score >= threshold:
         status = FieldStatus.PASS
     elif score >= 70:
@@ -155,7 +157,7 @@ def compare_label(extracted: LabelFields, form_data: LabelFields) -> Verificatio
         check_fuzzy_field("class_type", extracted.class_type, form_data.class_type, threshold=85),
         check_abv(extracted.alcohol_content, form_data.alcohol_content),
         check_net_contents(extracted.net_contents, form_data.net_contents),
-        check_fuzzy_field("producer_name_address", extracted.producer_name_address, form_data.producer_name_address, threshold=80),
+        check_fuzzy_field("producer_name_address", extracted.producer_name_address, form_data.producer_name_address, threshold=80, partial=True),
         check_exact_field("country_of_origin", extracted.country_of_origin, form_data.country_of_origin),
         check_government_warning(extracted.government_warning, form_data.government_warning),
     ]
