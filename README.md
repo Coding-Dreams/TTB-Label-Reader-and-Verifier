@@ -13,10 +13,10 @@ AI-powered alcohol label verification prototype for the Alcohol and Tobacco Tax 
 git clone <repo-url>
 cd <repo>
 
-# Start services (pulls llava-phi3 on first run — ~2.2GB download)
-docker compose up --build
+# Start services in background
+docker compose up --build -d
 
-# Pull the vision model (run once)
+# Pull the vision model (one-time, ~2.2GB — takes a few minutes)
 docker compose exec ollama ollama pull llava-phi3
 ```
 
