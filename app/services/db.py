@@ -2,7 +2,6 @@ import sqlite3
 import json
 from pathlib import Path
 from typing import Optional, List
-from datetime import datetime
 
 DB_PATH = Path("data/verifications.db")
 
@@ -13,7 +12,7 @@ def init_db():
         conn.execute("""
             CREATE TABLE IF NOT EXISTS verifications (
                 id             INTEGER PRIMARY KEY AUTOINCREMENT,
-                created_at     DATETIME NOT NULL,
+                created_at     DATETIME DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
                 image_filename TEXT NOT NULL,
                 form_data      TEXT NOT NULL,
                 extracted      TEXT NOT NULL,
@@ -36,10 +35,9 @@ def save_verification(
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.execute(
             """INSERT INTO verifications
-               (created_at, image_filename, form_data, extracted, results, overall_pass, batch_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+               (image_filename, form_data, extracted, results, overall_pass, batch_id)
+               VALUES (?, ?, ?, ?, ?, ?)""",
             (
-                datetime.utcnow().isoformat(),
                 image_filename,
                 json.dumps(form_data),
                 json.dumps(extracted),
@@ -56,7 +54,7 @@ def get_verifications(limit: int = 100) -> List[dict]:
     with sqlite3.connect(DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            "SELECT * FROM verifications ORDER BY created_at DESC LIMIT ?", (limit,)
+            "SELECT * FROM verifications ORDER BY created_at DESC, id DESC LIMIT ?", (limit,)
         ).fetchall()
         return [dict(row) for row in rows]
 
