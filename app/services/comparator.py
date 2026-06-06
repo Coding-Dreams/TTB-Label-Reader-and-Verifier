@@ -86,3 +86,78 @@ def check_abv(extracted: Optional[str], submitted: Optional[str]) -> FieldResult
         extracted_value=extracted,
         submitted_value=submitted,
     )
+
+
+def _parse_volume_ml(value: str) -> Optional[float]:
+    v = value.lower().strip()
+    m = re.search(r"(\d+\.?\d*)\s*ml", v)
+    if m:
+        return float(m.group(1))
+    m = re.search(r"(\d+\.?\d*)\s*l(?:iter|itre)?s?\b", v)
+    if m:
+        return float(m.group(1)) * 1000
+    m = re.search(r"(\d+\.?\d*)\s*(?:fl\.?\s*oz|fluid\s*oz)", v)
+    if m:
+        return float(m.group(1)) * 29.5735
+    return None
+
+
+def check_net_contents(extracted: Optional[str], submitted: Optional[str]) -> FieldResult:
+    if extracted is None:
+        return FieldResult(
+            field="net_contents",
+            status=FieldStatus.NOT_DETECTED,
+            extracted_value=None,
+            submitted_value=submitted,
+        )
+    ext_ml = _parse_volume_ml(extracted)
+    sub_ml = _parse_volume_ml(submitted) if submitted else None
+    if ext_ml is None or sub_ml is None:
+        return check_fuzzy_field("net_contents", extracted, submitted, threshold=90)
+    passes = abs(ext_ml - sub_ml) <= 1.0
+    return FieldResult(
+        field="net_contents",
+        status=FieldStatus.PASS if passes else FieldStatus.FAIL,
+        extracted_value=extracted,
+        submitted_value=submitted,
+    )
+
+
+def check_exact_field(
+    field: str, extracted: Optional[str], submitted: Optional[str]
+) -> FieldResult:
+    if extracted is None:
+        return FieldResult(
+            field=field,
+            status=FieldStatus.NOT_DETECTED,
+            extracted_value=None,
+            submitted_value=submitted,
+        )
+    if submitted is None:
+        return FieldResult(
+            field=field,
+            status=FieldStatus.FAIL,
+            extracted_value=extracted,
+            submitted_value=None,
+        )
+    passes = extracted.strip().lower() == submitted.strip().lower()
+    return FieldResult(
+        field=field,
+        status=FieldStatus.PASS if passes else FieldStatus.FAIL,
+        extracted_value=extracted,
+        submitted_value=submitted,
+    )
+
+
+def compare_label(extracted: LabelFields, form_data: LabelFields) -> VerificationResult:
+    results = [
+        check_fuzzy_field("brand_name", extracted.brand_name, form_data.brand_name, threshold=90),
+        check_fuzzy_field("class_type", extracted.class_type, form_data.class_type, threshold=85),
+        check_abv(extracted.alcohol_content, form_data.alcohol_content),
+        check_net_contents(extracted.net_contents, form_data.net_contents),
+        check_fuzzy_field("producer_name_address", extracted.producer_name_address, form_data.producer_name_address, threshold=80),
+        check_exact_field("country_of_origin", extracted.country_of_origin, form_data.country_of_origin),
+        check_government_warning(extracted.government_warning, form_data.government_warning),
+    ]
+    overall_pass = all(r.status != FieldStatus.FAIL for r in results)
+    return VerificationResult(overall_pass=overall_pass, fields=results)

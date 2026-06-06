@@ -105,3 +105,98 @@ def test_abv_not_detected_when_none():
 def test_abv_field_name_is_correct():
     result = check_abv("45%", "45%")
     assert result.field == "alcohol_content"
+
+
+from app.services.comparator import check_net_contents, check_exact_field, compare_label
+from app.models.label import LabelFields
+
+
+def test_net_contents_passes_case_insensitive_ml():
+    result = check_net_contents("750 mL", "750ml")
+    assert result.status == FieldStatus.PASS
+
+
+def test_net_contents_passes_litre_to_ml():
+    result = check_net_contents("0.75 L", "750 mL")
+    assert result.status == FieldStatus.PASS
+
+
+def test_net_contents_fails_different_volume():
+    result = check_net_contents("750 mL", "1000 mL")
+    assert result.status == FieldStatus.FAIL
+
+
+def test_net_contents_not_detected_when_none():
+    result = check_net_contents(None, "750 mL")
+    assert result.status == FieldStatus.NOT_DETECTED
+
+
+def test_exact_field_passes_case_insensitive():
+    result = check_exact_field("country_of_origin", "united states", "United States")
+    assert result.status == FieldStatus.PASS
+
+
+def test_exact_field_fails_mismatch():
+    result = check_exact_field("country_of_origin", "France", "United States")
+    assert result.status == FieldStatus.FAIL
+
+
+def test_exact_field_not_detected_when_none():
+    result = check_exact_field("country_of_origin", None, "United States")
+    assert result.status == FieldStatus.NOT_DETECTED
+
+
+def test_compare_label_all_pass():
+    warning = "GOVERNMENT WARNING: According to the Surgeon General, women should not drink alcoholic beverages during pregnancy because of the risk of birth defects."
+    extracted = LabelFields(
+        brand_name="OLD TOM DISTILLERY",
+        class_type="Kentucky Straight Bourbon Whiskey",
+        alcohol_content="45% Alc./Vol. (90 Proof)",
+        net_contents="750 mL",
+        producer_name_address="Old Tom Distillery, Louisville, KY",
+        country_of_origin="United States",
+        government_warning=warning,
+    )
+    form_data = LabelFields(
+        brand_name="OLD TOM DISTILLERY",
+        class_type="Kentucky Straight Bourbon Whiskey",
+        alcohol_content="45%",
+        net_contents="750ml",
+        producer_name_address="Old Tom Distillery, Louisville, KY",
+        country_of_origin="United States",
+        government_warning=warning,
+    )
+    result = compare_label(extracted, form_data)
+    assert result.overall_pass is True
+    assert all(f.status == FieldStatus.PASS for f in result.fields)
+
+
+def test_compare_label_fails_on_bad_warning():
+    extracted = LabelFields(
+        brand_name="OLD TOM DISTILLERY",
+        government_warning="Government Warning: (lowercase)",
+    )
+    form_data = LabelFields(
+        brand_name="OLD TOM DISTILLERY",
+        government_warning="GOVERNMENT WARNING: ...",
+    )
+    result = compare_label(extracted, form_data)
+    assert result.overall_pass is False
+    warning_result = next(f for f in result.fields if f.field == "government_warning")
+    assert warning_result.status == FieldStatus.FAIL
+
+
+def test_compare_label_warn_does_not_fail_overall():
+    warning = "GOVERNMENT WARNING: ..."
+    extracted = LabelFields(
+        brand_name="OLD TOM DISTELRY",  # typo — should be WARN not FAIL
+        government_warning=warning,
+    )
+    form_data = LabelFields(
+        brand_name="OLD TOM DISTILLERY",
+        government_warning=warning,
+    )
+    result = compare_label(extracted, form_data)
+    brand_result = next(f for f in result.fields if f.field == "brand_name")
+    assert brand_result.status == FieldStatus.WARN
+    assert result.overall_pass is True
