@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TTB Label Verification — History</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 min-h-screen">
+
+  <nav class="bg-white border-b border-gray-200 px-6 py-3 flex gap-6">
+    <a href="/" class="text-gray-600 hover:text-blue-600">Verify</a>
+    <a href="/batch-upload" class="text-gray-600 hover:text-blue-600">Batch</a>
+    <a href="/history" class="font-semibold text-blue-600">History</a>
+  </nav>
+
+  <main class="max-w-5xl mx-auto p-6">
+    <h1 class="text-2xl font-bold text-gray-800 mb-6">Verification History</h1>
+
+    <div class="bg-white rounded-lg shadow overflow-hidden">
+      <table class="w-full text-sm">
+        <thead class="bg-gray-50 border-b">
+          <tr class="text-left text-gray-500">
+            <th class="px-4 py-3">Date / Time</th>
+            <th class="px-4 py-3">File</th>
+            <th class="px-4 py-3">Type</th>
+            <th class="px-4 py-3">Result</th>
+            <th class="px-4 py-3"></th>
+          </tr>
+        </thead>
+        <tbody id="history-body">
+          <tr><td colspan="5" class="px-4 py-6 text-center text-gray-400">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Detail Panel -->
+    <div id="detail-panel" class="hidden mt-6 bg-white rounded-lg shadow p-5">
+      <div class="flex justify-between items-center mb-3">
+        <h2 id="detail-title" class="font-semibold text-gray-700"></h2>
+        <button onclick="document.getElementById('detail-panel').classList.add('hidden')"
+          class="text-gray-400 hover:text-gray-600 text-lg">✕</button>
+      </div>
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-left text-gray-500 border-b">
+            <th class="pb-2">Field</th>
+            <th class="pb-2">Status</th>
+            <th class="pb-2">Extracted</th>
+            <th class="pb-2">Submitted</th>
+          </tr>
+        </thead>
+        <tbody id="detail-body"></tbody>
+      </table>
+    </div>
+  </main>
+
+  <script>
+    const FIELD_LABELS = {
+      brand_name: 'Brand Name', class_type: 'Class / Type', alcohol_content: 'Alcohol Content',
+      net_contents: 'Net Contents', producer_name_address: 'Producer Name & Address',
+      country_of_origin: 'Country of Origin', government_warning: 'Government Warning'
+    };
+    const STATUS_STYLE = {
+      pass: 'text-green-600 font-semibold', fail: 'text-red-600 font-semibold',
+      warn: 'text-yellow-600 font-semibold', not_detected: 'text-gray-400'
+    };
+    const STATUS_ICON = { pass: '✓', fail: '✗', warn: '⚠', not_detected: '—' };
+
+    async function loadHistory() {
+      const res = await fetch('/api/history');
+      const records = await res.json();
+      const tbody = document.getElementById('history-body');
+      if (!records.length) {
+        tbody.innerHTML = '<tr><td colspan="5" class="px-4 py-6 text-center text-gray-400">No verifications yet.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = records.map(r => {
+        const dt = new Date(r.created_at + 'Z').toLocaleString();
+        const type = r.batch_id ? 'Batch' : 'Single';
+        const result = r.overall_pass
+          ? '<span class="text-green-600 font-semibold">✓ Pass</span>'
+          : '<span class="text-red-600 font-semibold">✗ Fail</span>';
+        return `<tr class="border-b last:border-0 hover:bg-gray-50 cursor-pointer" onclick="showDetail(${r.id}, '${r.image_filename}')">
+          <td class="px-4 py-3 text-gray-600">${dt}</td>
+          <td class="px-4 py-3 text-gray-800">${r.image_filename}</td>
+          <td class="px-4 py-3 text-gray-500">${type}</td>
+          <td class="px-4 py-3">${result}</td>
+          <td class="px-4 py-3 text-blue-500 text-xs">View</td>
+        </tr>`;
+      }).join('');
+    }
+
+    async function showDetail(id, filename) {
+      const res = await fetch(`/api/history/${id}`);
+      const record = await res.json();
+      const results = JSON.parse(record.results);
+      document.getElementById('detail-title').textContent = filename;
+      document.getElementById('detail-body').innerHTML = results.fields.map(f => `
+        <tr class="border-b last:border-0">
+          <td class="py-2 text-gray-700">${FIELD_LABELS[f.field] || f.field}</td>
+          <td class="py-2 ${STATUS_STYLE[f.status]}">${STATUS_ICON[f.status]} ${f.status.replace('_', ' ')}</td>
+          <td class="py-2 text-gray-600 text-xs max-w-xs truncate">${f.extracted_value ?? '—'}</td>
+          <td class="py-2 text-gray-600 text-xs max-w-xs truncate">${f.submitted_value ?? '—'}</td>
+        </tr>`).join('');
+      document.getElementById('detail-panel').classList.remove('hidden');
+    }
+
+    loadHistory();
+  </script>
+</body>
+</html>

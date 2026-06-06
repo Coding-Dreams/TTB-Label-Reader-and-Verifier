@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TTB Label Verification — Batch</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 min-h-screen">
+
+  <nav class="bg-white border-b border-gray-200 px-6 py-3 flex gap-6">
+    <a href="/" class="text-gray-600 hover:text-blue-600">Verify</a>
+    <a href="/batch-upload" class="font-semibold text-blue-600">Batch</a>
+    <a href="/history" class="text-gray-600 hover:text-blue-600">History</a>
+  </nav>
+
+  <main class="max-w-3xl mx-auto p-6">
+    <h1 class="text-2xl font-bold text-gray-800 mb-2">Batch Verification</h1>
+    <p class="text-sm text-gray-500 mb-6">Upload multiple label images and a CSV file with application data.</p>
+
+    <div class="bg-white rounded-lg shadow p-5 space-y-4">
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Label Images (select multiple)</label>
+        <input type="file" id="images-input" accept="image/*" multiple
+          class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100" />
+        <p id="images-count" class="text-xs text-gray-400 mt-1"></p>
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Application Data (CSV)</label>
+        <input type="file" id="csv-input" accept=".csv"
+          class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-gray-50 file:text-gray-700 hover:file:bg-gray-100" />
+        <p class="text-xs text-gray-400 mt-1">
+          Columns: <code class="bg-gray-100 px-1 rounded">image_filename, brand_name, class_type, alcohol_content, net_contents, producer_name_address, country_of_origin, government_warning</code>
+        </p>
+      </div>
+
+      <button id="run-btn"
+        class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded disabled:opacity-50"
+        disabled>
+        Run Batch
+      </button>
+    </div>
+
+    <!-- Progress -->
+    <div id="progress-section" class="hidden mt-6 bg-white rounded-lg shadow p-5">
+      <div class="flex justify-between text-sm text-gray-600 mb-2">
+        <span id="progress-label">Processing...</span>
+        <span id="progress-count"></span>
+      </div>
+      <div class="w-full bg-gray-200 rounded-full h-3">
+        <div id="progress-bar" class="bg-blue-600 h-3 rounded-full transition-all duration-300" style="width:0%"></div>
+      </div>
+    </div>
+
+    <!-- Results -->
+    <div id="results-section" class="hidden mt-6 bg-white rounded-lg shadow p-5">
+      <div class="flex justify-between items-center mb-3">
+        <h2 class="font-semibold text-gray-700">Results</h2>
+        <a id="download-btn" href="#"
+          class="bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-medium py-1.5 px-3 rounded">
+          Download CSV
+        </a>
+      </div>
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-left text-gray-500 border-b">
+            <th class="pb-2">File</th>
+            <th class="pb-2">Result</th>
+            <th class="pb-2">Details</th>
+          </tr>
+        </thead>
+        <tbody id="results-body"></tbody>
+      </table>
+    </div>
+
+    <div id="error-msg" class="hidden mt-4 text-red-600 bg-red-50 border border-red-200 rounded p-3 text-sm"></div>
+  </main>
+
+  <script>
+    let jobId = null;
+    let pollInterval = null;
+
+    document.getElementById('images-input').addEventListener('change', (e) => {
+      const count = e.target.files.length;
+      document.getElementById('images-count').textContent = `${count} image${count !== 1 ? 's' : ''} selected`;
+      checkReady();
+    });
+
+    document.getElementById('csv-input').addEventListener('change', checkReady);
+
+    function checkReady() {
+      const hasImages = document.getElementById('images-input').files.length > 0;
+      const hasCsv = document.getElementById('csv-input').files.length > 0;
+      document.getElementById('run-btn').disabled = !(hasImages && hasCsv);
+    }
+
+    document.getElementById('run-btn').addEventListener('click', async () => {
+      const btn = document.getElementById('run-btn');
+      btn.disabled = true;
+      document.getElementById('error-msg').classList.add('hidden');
+      document.getElementById('results-section').classList.add('hidden');
+
+      const fd = new FormData();
+      Array.from(document.getElementById('images-input').files).forEach(f => fd.append('images', f));
+      fd.append('csv_file', document.getElementById('csv-input').files[0]);
+
+      try {
+        const res = await fetch('/batch', { method: 'POST', body: fd });
+        if (!res.ok) throw new Error((await res.json()).detail);
+        const data = await res.json();
+        jobId = data.job_id;
+        startPolling(data.total);
+      } catch (err) {
+        showError(err.message);
+        btn.disabled = false;
+      }
+    });
+
+    function startPolling(total) {
+      document.getElementById('progress-section').classList.remove('hidden');
+      pollInterval = setInterval(async () => {
+        const res = await fetch(`/batch/${jobId}/status`);
+        const job = await res.json();
+        const pct = total > 0 ? Math.round((job.completed / total) * 100) : 0;
+        document.getElementById('progress-bar').style.width = pct + '%';
+        document.getElementById('progress-count').textContent = `${job.completed} / ${total}`;
+        if (job.status === 'done') {
+          clearInterval(pollInterval);
+          document.getElementById('progress-label').textContent = 'Complete';
+          renderResults(job.results, jobId);
+        }
+      }, 2000);
+    }
+
+    function renderResults(results, jid) {
+      document.getElementById('download-btn').href = `/batch/${jid}/download`;
+      const tbody = document.getElementById('results-body');
+      tbody.innerHTML = results.map(r => {
+        const status = r.error
+          ? `<span class="text-red-500 font-semibold">Error: ${r.error}</span>`
+          : r.overall_pass
+            ? '<span class="text-green-600 font-semibold">✓ Pass</span>'
+            : '<span class="text-red-600 font-semibold">✗ Fail</span>';
+        const fails = (r.fields || []).filter(f => f.status === 'fail').map(f => f.field).join(', ');
+        return `<tr class="border-b last:border-0">
+          <td class="py-2 text-gray-700">${r.image_filename}</td>
+          <td class="py-2">${status}</td>
+          <td class="py-2 text-xs text-gray-500">${fails ? 'Failed: ' + fails : (r.error ? '' : 'All fields matched')}</td>
+        </tr>`;
+      }).join('');
+      document.getElementById('results-section').classList.remove('hidden');
+    }
+
+    function showError(msg) {
+      const el = document.getElementById('error-msg');
+      el.textContent = msg;
+      el.classList.remove('hidden');
+    }
+  </script>
+</body>
+</html>

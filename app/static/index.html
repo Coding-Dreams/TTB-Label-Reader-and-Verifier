@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TTB Label Verification</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 min-h-screen">
+
+  <!-- Nav -->
+  <nav class="bg-white border-b border-gray-200 px-6 py-3 flex gap-6">
+    <a href="/" class="font-semibold text-blue-600">Verify</a>
+    <a href="/batch-upload" class="text-gray-600 hover:text-blue-600">Batch</a>
+    <a href="/history" class="text-gray-600 hover:text-blue-600">History</a>
+  </nav>
+
+  <main class="max-w-5xl mx-auto p-6">
+    <h1 class="text-2xl font-bold text-gray-800 mb-6">Label Verification</h1>
+
+    <div class="grid grid-cols-2 gap-6">
+
+      <!-- Left: Image Upload -->
+      <div class="bg-white rounded-lg shadow p-5">
+        <h2 class="font-semibold text-gray-700 mb-3">Label Image</h2>
+        <label id="drop-zone"
+          class="flex flex-col items-center justify-center border-2 border-dashed border-gray-300 rounded-lg h-48 cursor-pointer hover:border-blue-400 transition-colors">
+          <span class="text-gray-400 text-sm" id="drop-label">Click or drag image here</span>
+          <input type="file" id="image-input" accept="image/*" class="hidden" />
+        </label>
+        <img id="image-preview" class="mt-3 rounded hidden max-h-48 w-full object-contain" />
+        <button id="extract-btn"
+          class="mt-3 w-full bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium py-2 px-4 rounded disabled:opacity-50"
+          disabled>
+          Extract from Image
+        </button>
+      </div>
+
+      <!-- Right: Form Fields -->
+      <div class="bg-white rounded-lg shadow p-5">
+        <h2 class="font-semibold text-gray-700 mb-3">Application Data</h2>
+        <div class="space-y-3">
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Brand Name</label>
+            <input id="brand_name" type="text" class="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Class / Type</label>
+            <input id="class_type" type="text" class="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Alcohol Content</label>
+            <input id="alcohol_content" type="text" class="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Net Contents</label>
+            <input id="net_contents" type="text" class="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Producer Name &amp; Address</label>
+            <input id="producer_name_address" type="text" class="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Country of Origin</label>
+            <input id="country_of_origin" type="text" class="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+          </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Government Warning</label>
+            <textarea id="government_warning" rows="3" class="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"></textarea>
+          </div>
+        </div>
+        <button id="verify-btn"
+          class="mt-4 w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded disabled:opacity-50"
+          disabled>
+          Verify Label
+        </button>
+      </div>
+    </div>
+
+    <!-- Results -->
+    <div id="results" class="mt-6 hidden bg-white rounded-lg shadow p-5">
+      <div id="overall-banner" class="text-lg font-bold mb-4 p-3 rounded"></div>
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-left text-gray-500 border-b">
+            <th class="pb-2">Field</th>
+            <th class="pb-2">Status</th>
+            <th class="pb-2">Extracted from Label</th>
+            <th class="pb-2">Submitted Value</th>
+          </tr>
+        </thead>
+        <tbody id="results-body"></tbody>
+      </table>
+    </div>
+
+    <div id="error-msg" class="mt-4 hidden text-red-600 bg-red-50 border border-red-200 rounded p-3 text-sm"></div>
+  </main>
+
+  <script>
+    const FIELDS = ['brand_name','class_type','alcohol_content','net_contents','producer_name_address','country_of_origin','government_warning'];
+    const FIELD_LABELS = {
+      brand_name: 'Brand Name', class_type: 'Class / Type', alcohol_content: 'Alcohol Content',
+      net_contents: 'Net Contents', producer_name_address: 'Producer Name & Address',
+      country_of_origin: 'Country of Origin', government_warning: 'Government Warning'
+    };
+    const STATUS_STYLE = {
+      pass: 'text-green-600 font-semibold', fail: 'text-red-600 font-semibold',
+      warn: 'text-yellow-600 font-semibold', not_detected: 'text-gray-400'
+    };
+    const STATUS_ICON = { pass: '✓', fail: '✗', warn: '⚠', not_detected: '—' };
+
+    let selectedFile = null;
+
+    document.getElementById('drop-zone').addEventListener('click', () => {
+      document.getElementById('image-input').click();
+    });
+
+    document.getElementById('image-input').addEventListener('change', (e) => {
+      selectedFile = e.target.files[0];
+      if (!selectedFile) return;
+      document.getElementById('drop-label').textContent = selectedFile.name;
+      const preview = document.getElementById('image-preview');
+      preview.src = URL.createObjectURL(selectedFile);
+      preview.classList.remove('hidden');
+      document.getElementById('extract-btn').disabled = false;
+      document.getElementById('verify-btn').disabled = false;
+    });
+
+    document.getElementById('extract-btn').addEventListener('click', async () => {
+      if (!selectedFile) return;
+      const btn = document.getElementById('extract-btn');
+      btn.textContent = 'Extracting...';
+      btn.disabled = true;
+      const fd = new FormData();
+      fd.append('image', selectedFile);
+      try {
+        const res = await fetch('/extract', { method: 'POST', body: fd });
+        if (!res.ok) throw new Error((await res.json()).detail);
+        const data = await res.json();
+        FIELDS.forEach(f => {
+          if (data[f]) document.getElementById(f).value = data[f];
+        });
+      } catch (err) {
+        showError(err.message);
+      } finally {
+        btn.textContent = 'Extract from Image';
+        btn.disabled = false;
+      }
+    });
+
+    document.getElementById('verify-btn').addEventListener('click', async () => {
+      if (!selectedFile) return;
+      const btn = document.getElementById('verify-btn');
+      btn.textContent = 'Verifying...';
+      btn.disabled = true;
+      document.getElementById('error-msg').classList.add('hidden');
+      document.getElementById('results').classList.add('hidden');
+
+      const fd = new FormData();
+      fd.append('image', selectedFile);
+      FIELDS.forEach(f => fd.append(f, document.getElementById(f).value));
+
+      try {
+        const res = await fetch('/verify', { method: 'POST', body: fd });
+        if (!res.ok) throw new Error((await res.json()).detail);
+        const data = await res.json();
+        renderResults(data);
+      } catch (err) {
+        showError(err.message);
+      } finally {
+        btn.textContent = 'Verify Label';
+        btn.disabled = false;
+      }
+    });
+
+    function renderResults(data) {
+      const banner = document.getElementById('overall-banner');
+      if (data.overall_pass) {
+        banner.textContent = '✓ APPROVED — All fields match';
+        banner.className = 'text-lg font-bold mb-4 p-3 rounded bg-green-50 text-green-700';
+      } else {
+        banner.textContent = '✗ REJECTED — One or more fields failed';
+        banner.className = 'text-lg font-bold mb-4 p-3 rounded bg-red-50 text-red-700';
+      }
+      const tbody = document.getElementById('results-body');
+      tbody.innerHTML = data.fields.map(f => `
+        <tr class="border-b last:border-0">
+          <td class="py-2 text-gray-700">${FIELD_LABELS[f.field] || f.field}</td>
+          <td class="py-2 ${STATUS_STYLE[f.status]}">${STATUS_ICON[f.status]} ${f.status.replace('_', ' ')}</td>
+          <td class="py-2 text-gray-600 text-xs max-w-xs truncate">${f.extracted_value ?? '—'}</td>
+          <td class="py-2 text-gray-600 text-xs max-w-xs truncate">${f.submitted_value ?? '—'}</td>
+        </tr>`).join('');
+      document.getElementById('results').classList.remove('hidden');
+    }
+
+    function showError(msg) {
+      const el = document.getElementById('error-msg');
+      el.textContent = msg;
+      el.classList.remove('hidden');
+    }
+  </script>
+</body>
+</html>
