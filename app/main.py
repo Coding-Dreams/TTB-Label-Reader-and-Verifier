@@ -1,15 +1,22 @@
+import asyncio
+import logging
+
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from app.routers import verify, batch
 from app.services.db import init_db, get_verifications, get_verification
+from app.services.ollama import _warmup_model
 
 app = FastAPI(title="TTB Label Verification")
+
+logger = logging.getLogger(__name__)
 
 @app.on_event("startup")
 async def startup():
     init_db()
+    asyncio.create_task(_warmup_model())
 
 app.include_router(verify.router)
 app.include_router(batch.router)
