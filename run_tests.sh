@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # Verify the api container is running
-if ! docker compose ps api 2>/dev/null | grep -qi "running"; then
+if ! docker compose ps --status running api 2>/dev/null | grep -q "api"; then
     echo "Error: api container is not running. Start it with: docker compose up -d"
     exit 1
 fi
