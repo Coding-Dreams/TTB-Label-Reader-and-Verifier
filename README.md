@@ -5,7 +5,7 @@ AI-powered alcohol label verification prototype for the Alcohol and Tobacco Tax 
 ## Requirements
 
 - Docker and Docker Compose
-- NVIDIA GPU strongly recommended (glm-ocr runs in ~2-4s on GPU; ~30-60s on CPU)
+- NVIDIA GPU strongly recommended (qwen2.5vl:3b runs in ~3-5s on RTX 4090; ~15s on RTX 3070 Mobile)
 - For GPU support: [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) must be installed and configured
 
 ## Quick Start
@@ -17,8 +17,8 @@ cd <repo>
 # Start services in background
 docker compose up --build -d
 
-# Pull the vision model (one-time, ~2.2GB — takes a few minutes)
-docker compose exec ollama ollama pull glm-ocr
+# Pull the vision model (one-time, ~2GB — takes a few minutes)
+docker compose exec ollama ollama pull qwen2.5vl:3b
 ```
 
 Open **http://localhost:8000**
