@@ -4,27 +4,24 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-VENV="$SCRIPT_DIR/venv"
-if [ ! -f "$VENV/bin/activate" ]; then
-    echo "Creating virtual environment..."
-    python3 -m venv "$VENV"
+# Verify the api container is running
+if ! docker compose ps api 2>/dev/null | grep -q "running"; then
+    echo "Error: api container is not running. Start it with: docker compose up -d"
+    exit 1
 fi
-
-source "$VENV/bin/activate"
-pip install -q -r requirements.txt
 
 case "${1:-all}" in
     unit)
         echo "Running unit tests..."
-        pytest tests/ -m "not integration" -v
+        docker compose exec api pytest tests/ -m "not integration" -v
         ;;
     integration)
-        echo "Running integration tests (requires Docker + Ollama running)..."
-        pytest tests/test_integration.py -v
+        echo "Running integration tests..."
+        docker compose exec api pytest tests/test_integration.py -v
         ;;
     all)
         echo "Running all tests..."
-        pytest tests/ -v
+        docker compose exec api pytest tests/ -v
         ;;
     *)
         echo "Usage: $0 [unit|integration|all]"
