@@ -9,8 +9,8 @@ from typing import Optional
 from app.models.label import LabelFields
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-MODEL = "llava-phi3"
-TIMEOUT = 30.0
+MODEL = "glm-ocr"
+TIMEOUT = 120.0
 
 _EXTRACTION_PROMPT = """You are an OCR assistant specialized in reading alcohol beverage labels.
 Extract the following fields from this label image and return ONLY valid JSON with no additional text.
@@ -27,10 +27,20 @@ Required JSON format:
 }
 
 Rules:
-- Return the exact text as it appears on the label
+- Copy the exact text as it appears on the label for each field
 - Set any field to null if not visible or not present on the label
-- For government_warning, include the complete warning text
-- Return ONLY the JSON object, no explanation or markdown"""
+- Return ONLY the JSON object, no explanation or markdown
+
+Field guidance:
+- brand_name: the product or distillery name (e.g., "Jack Daniel's", "ABC Distillery")
+- class_type: the beverage category printed on the label (e.g., "Straight Rye Whisky", "American Red Wine", "Rum with Coconut Liqueur") — NEVER a JSON key name
+- alcohol_content: the ABV as printed (e.g., "45% ALC/VOL", "13% BY VOL")
+- net_contents: the volume as printed (e.g., "750 ML", "1 PINT", "200 ML")
+- producer_name_address: distiller, bottler, or importer name and address as printed
+- country_of_origin: country where produced or imported from
+- government_warning: copy the COMPLETE warning text EXACTLY as printed, including the "GOVERNMENT WARNING:" heading — this heading MUST be included if it appears on the label
+
+CRITICAL: Values must be text read from the label image. Never use JSON key names (brand_name, class_type, alcohol_content, etc.) as values."""
 
 _STRICT_PROMPT = _EXTRACTION_PROMPT + "\n\nCRITICAL: Your response must begin with { and end with }. No other characters outside the JSON."
 
@@ -67,4 +77,29 @@ def _parse_json(raw: str) -> dict:
     match = re.search(r"\{.*\}", raw, re.DOTALL)
     if match:
         raw = match.group(0)
-    return json.loads(raw)
+    return _postprocess(json.loads(raw))
+
+
+_FIELD_NAMES = {
+    "brand_name", "class_type", "alcohol_content", "net_contents",
+    "producer_name_address", "country_of_origin", "government_warning",
+}
+
+def _postprocess(data: dict) -> dict:
+    # Normalize empty strings to None
+    for key in list(data.keys()):
+        if isinstance(data[key], str) and not data[key].strip():
+            data[key] = None
+
+    # If any field's value is a JSON key name, the model confused structure with content
+    for key in list(data.keys()):
+        val = data[key]
+        if isinstance(val, str) and val.strip().lower().replace(" ", "_") in _FIELD_NAMES:
+            data[key] = None
+
+    # Ensure government_warning includes the required "GOVERNMENT WARNING:" prefix
+    gw = data.get("government_warning")
+    if gw and not gw.upper().lstrip().startswith("GOVERNMENT WARNING"):
+        data["government_warning"] = "GOVERNMENT WARNING: " + gw.strip()
+
+    return data

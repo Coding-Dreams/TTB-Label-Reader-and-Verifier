@@ -1,11 +1,12 @@
 # TTB Label Verification
 
-AI-powered alcohol label verification prototype for the Alcohol and Tobacco Tax and Trade Bureau (TTB). Extracts fields from label images using a local vision model (llava-phi3 via Ollama) and compares them against applicant-submitted application data.
+AI-powered alcohol label verification prototype for the Alcohol and Tobacco Tax and Trade Bureau (TTB). Extracts fields from label images using a local vision model (glm-ocr via Ollama) and compares them against applicant-submitted application data.
 
 ## Requirements
 
 - Docker and Docker Compose
-- GPU strongly recommended (llava-phi3 runs in ~2-4s on GPU; ~15-30s on CPU)
+- NVIDIA GPU strongly recommended (glm-ocr runs in ~2-4s on GPU; ~30-60s on CPU)
+- For GPU support: [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) must be installed and configured
 
 ## Quick Start
 
@@ -17,7 +18,7 @@ cd <repo>
 docker compose up --build -d
 
 # Pull the vision model (one-time, ~2.2GB — takes a few minutes)
-docker compose exec ollama ollama pull llava-phi3
+docker compose exec ollama ollama pull glm-ocr
 ```
 
 Open **http://localhost:8000**
@@ -78,7 +79,7 @@ pytest tests/ -v
 
 ## Known Limitations
 
-- **Latency:** GPU strongly recommended to meet the 5-second target. CPU-only machines will see 15–30s per label with llava-phi3.
-- **Decorative fonts:** Small VLMs can misread highly stylized label typography. The Extract & Review flow lets agents correct bad extractions.
+- **Latency:** GPU strongly recommended to meet the 5-second target. CPU-only machines will see 30–60s per label with glm-ocr.
+- **Decorative fonts:** glm-ocr may miss fields in circular badges, oval formats, or highly stylized typography. The Extract & Review flow lets agents correct bad extractions before verifying.
 - **No authentication:** Prototype scope only.
 - **Batch job state:** In-memory only — jobs are lost on server restart.
