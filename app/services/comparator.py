@@ -60,3 +60,29 @@ def check_fuzzy_field(
         submitted_value=submitted,
         score=float(score),
     )
+
+
+def _parse_abv(value: str) -> Optional[float]:
+    match = re.search(r"(\d+\.?\d*)\s*%", value)
+    return float(match.group(1)) if match else None
+
+
+def check_abv(extracted: Optional[str], submitted: Optional[str]) -> FieldResult:
+    if extracted is None:
+        return FieldResult(
+            field="alcohol_content",
+            status=FieldStatus.NOT_DETECTED,
+            extracted_value=None,
+            submitted_value=submitted,
+        )
+    ext_val = _parse_abv(extracted)
+    sub_val = _parse_abv(submitted) if submitted else None
+    if ext_val is None or sub_val is None:
+        return check_fuzzy_field("alcohol_content", extracted, submitted, threshold=90)
+    passes = abs(ext_val - sub_val) <= 0.1
+    return FieldResult(
+        field="alcohol_content",
+        status=FieldStatus.PASS if passes else FieldStatus.FAIL,
+        extracted_value=extracted,
+        submitted_value=submitted,
+    )

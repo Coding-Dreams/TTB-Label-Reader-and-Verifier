@@ -72,3 +72,36 @@ def test_fuzzy_returns_not_detected_when_extracted_is_none():
 def test_fuzzy_field_name_preserved():
     result = check_fuzzy_field("class_type", "Kentucky Bourbon", "Kentucky Bourbon", threshold=85)
     assert result.field == "class_type"
+
+
+from app.services.comparator import check_abv
+
+
+def test_abv_passes_with_full_format():
+    result = check_abv("45% Alc./Vol. (90 Proof)", "45%")
+    assert result.status == FieldStatus.PASS
+
+
+def test_abv_passes_with_decimal():
+    result = check_abv("40.0% Alc./Vol.", "40%")
+    assert result.status == FieldStatus.PASS
+
+
+def test_abv_fails_on_mismatch():
+    result = check_abv("40%", "45%")
+    assert result.status == FieldStatus.FAIL
+
+
+def test_abv_passes_within_tolerance():
+    result = check_abv("45.05%", "45%")
+    assert result.status == FieldStatus.PASS
+
+
+def test_abv_not_detected_when_none():
+    result = check_abv(None, "45%")
+    assert result.status == FieldStatus.NOT_DETECTED
+
+
+def test_abv_field_name_is_correct():
+    result = check_abv("45%", "45%")
+    assert result.field == "alcohol_content"
