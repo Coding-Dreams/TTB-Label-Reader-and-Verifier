@@ -10,3 +10,4 @@ class LabelFields(BaseModel):
     producer_name_address: Optional[str] = None
     country_of_origin: Optional[str] = None
     government_warning: Optional[str] = None
+    contains_sulfites: Optional[str] = None

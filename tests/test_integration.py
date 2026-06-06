@@ -22,8 +22,9 @@ GROUND_TRUTH = {
         "class_type":           ("Straight Rye Whisky", 80),
         "alcohol_content":      ("45%", 80),
         "net_contents":         ("750", 80),
-        "producer_name_address":("ABC Distillery", 70),
-        "country_of_origin":    ("United States", 90),
+        "producer_name_address":("ABC Distillery Frederick, MD", 70),
+        "country_of_origin":    ("", 90),       # not required for domestic spirits
+        "contains_sulfites":    ("", 70),        # whisky — no sulfite declaration
         "government_warning":   ("GOVERNMENT WARNING:", 70),
     },
     "test2.png": {
@@ -31,30 +32,41 @@ GROUND_TRUTH = {
         "class_type":           ("Red Wine", 70),
         "alcohol_content":      ("13%", 80),
         "net_contents":         ("750", 80),
-        # No explicit country field — "AMERICAN RED WINE" is the class designation, not a country
+        "producer_name_address":("XYZ Cellars", 70),
+        "country_of_origin":    ("", 90),       # not required for domestic wine
+        "contains_sulfites":    ("CONTAINS SULFITES", 70),
         "government_warning":   ("GOVERNMENT WARNING:", 70),
     },
     "test3.jpg": {
-        # brand_name is a large decorative "12345" graphic — known model limitation for stylized fonts
+        "brand_name":           ("12345 Imports", 80),
         "class_type":           ("Rum", 70),
         "alcohol_content":      ("18%", 80),
         "net_contents":         ("200", 80),
         "producer_name_address":("12345 IMPORTS", 70),
         "country_of_origin":    ("Canada", 90),
+        "contains_sulfites":    ("", 70),        # rum — no sulfite declaration
         "government_warning":   ("GOVERNMENT WARNING:", 70),
     },
     "test4.png": {
-        "brand_name":           ("MALT", 70),
+        "brand_name":           ("MALT & HOP", 70),
         "class_type":           ("Ale", 70),
         "alcohol_content":      ("5%", 80),
         "net_contents":         ("PINT", 70),
-        # Model reads address only from bottom of front panel; brewery name is in curved branding
-        "producer_name_address":("HYATTSVILLE", 70),
+        "producer_name_address":("MALT & HOP", 70),
+        "country_of_origin":    ("", 90),       # not required for domestic beer
+        "contains_sulfites":    ("", 70),        # ale — no sulfite declaration
         "government_warning":   ("GOVERNMENT WARNING:", 70),
     },
 }
 
 # Submitted form data for each label — should produce overall_pass=True.
+_GOV_WARNING = (
+    "GOVERNMENT WARNING: (1) According to the Surgeon General, women should not drink "
+    "alcoholic beverages during pregnancy because of the risk of birth defects. "
+    "(2) Consumption of alcoholic beverages impairs your ability to drive a car or "
+    "operate machinery, and may cause health problems."
+)
+
 PASSING_SUBMISSIONS = {
     "test1.jpg": {
         "brand_name": "ABC",
@@ -63,26 +75,18 @@ PASSING_SUBMISSIONS = {
         "net_contents": "750 ML",
         "producer_name_address": "ABC Distillery, Frederick, MD",
         "country_of_origin": "United States",
-        "government_warning": (
-            "GOVERNMENT WARNING: (1) According to the Surgeon General, women should not drink "
-            "alcoholic beverages during pregnancy because of the risk of birth defects. "
-            "(2) Consumption of alcoholic beverages impairs your ability to drive a car or "
-            "operate machinery, and may cause health problems."
-        ),
+        "government_warning": _GOV_WARNING,
+        "contains_sulfites": "",
     },
     "test2.png": {
         "brand_name": "ABC WINERY",
         "class_type": "American Red Wine",
         "alcohol_content": "13% BY VOL",
         "net_contents": "750 ML",
-        "producer_name_address": "ABC Winery",
-        "country_of_origin": "United States",
-        "government_warning": (
-            "GOVERNMENT WARNING: (1) According to the Surgeon General, women should not drink "
-            "alcoholic beverages during pregnancy because of the risk of birth defects. "
-            "(2) Consumption of alcoholic beverages impairs your ability to drive a car or "
-            "operate machinery, and may cause health problems."
-        ),
+        "producer_name_address": "XYZ Cellars, City, State",
+        "country_of_origin": "",
+        "government_warning": _GOV_WARNING,
+        "contains_sulfites": "CONTAINS SULFITES",
     },
     "test3.jpg": {
         "brand_name": "12345 IMPORTS",
@@ -91,12 +95,8 @@ PASSING_SUBMISSIONS = {
         "net_contents": "200 ML",
         "producer_name_address": "12345 IMPORTS MIAMI, FL",
         "country_of_origin": "Canada",
-        "government_warning": (
-            "GOVERNMENT WARNING: (1) According to the Surgeon General, women should not drink "
-            "alcoholic beverages during pregnancy because of the risk of birth defects. "
-            "(2) Consumption of alcoholic beverages impairs your ability to drive a car or "
-            "operate machinery, and may cause health problems."
-        ),
+        "government_warning": _GOV_WARNING,
+        "contains_sulfites": "",
     },
     "test4.png": {
         "brand_name": "MALT & HOP BREWERY",
@@ -105,12 +105,8 @@ PASSING_SUBMISSIONS = {
         "net_contents": "1 PINT, 0.9 FL. OZ.",
         "producer_name_address": "MALT & HOP BREWERY HYATTSVILLE, MD",
         "country_of_origin": "United States",
-        "government_warning": (
-            "GOVERNMENT WARNING: (1) According to the Surgeon General, women should not drink "
-            "alcoholic beverages during pregnancy because of the risk of birth defects. "
-            "(2) Consumption of alcoholic beverages impairs your ability to drive a car or "
-            "operate machinery, and may cause health problems."
-        ),
+        "government_warning": _GOV_WARNING,
+        "contains_sulfites": "",
     },
 }
 
@@ -152,6 +148,8 @@ def test_extract_fields(api, filename, truth):
     data = resp.json()
 
     for field, (expected, threshold) in truth.items():
+        if not expected:  # empty string means field is not required / not checked for this label
+            continue
         extracted = data.get(field)
         assert _field_matches(extracted, expected, threshold), (
             f"{filename} — {field}: expected ~'{expected}' (threshold {threshold}%), "

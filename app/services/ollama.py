@@ -31,7 +31,8 @@ Required JSON format:
   "net_contents": "string or null",
   "producer_name_address": "string or null",
   "country_of_origin": "string or null",
-  "government_warning": "string or null"
+  "government_warning": "string or null",
+  "contains_sulfites": "string or null"
 }
 
 Rules:
@@ -42,7 +43,8 @@ Rules:
 - net_contents: the volume as printed (e.g. "750 ML", "1 PINT")
 - producer_name_address: the producer, bottler, or importer name and address as printed
 - country_of_origin: the country name only (e.g. "Canada", "United States") — NOT a city or US state
-- government_warning: the COMPLETE warning text EXACTLY as printed, including the "GOVERNMENT WARNING:" heading if present"""
+- government_warning: the COMPLETE warning text EXACTLY as printed, including the "GOVERNMENT WARNING:" heading if present
+- contains_sulfites: the sulfite declaration exactly as printed (e.g. "CONTAINS SULFITES"), or null if not present"""
 
 
 def _encode_image(image_path: Path) -> str:
@@ -113,10 +115,10 @@ def _parse_json(raw: str) -> dict:
 
 _FIELD_NAMES = {
     "brand_name", "class_type", "alcohol_content", "net_contents",
-    "producer_name_address", "country_of_origin", "government_warning",
+    "producer_name_address", "country_of_origin", "government_warning", "contains_sulfites",
 }
 
-_SINGLE_LINE_FIELDS = {"brand_name", "class_type", "alcohol_content", "net_contents", "country_of_origin"}
+_SINGLE_LINE_FIELDS = {"brand_name", "class_type", "alcohol_content", "net_contents", "country_of_origin", "contains_sulfites"}
 _NULL_SENTINELS = {"none", "null", "n/a", "na", "[none]", "unknown", "-"}
 _INVALID_COUNTRIES = {"american", "domestic", "imported", "local"}
 
@@ -149,14 +151,6 @@ def _postprocess(data: dict) -> dict:
         val = data[key]
         if isinstance(val, str) and val.strip().lower().replace(" ", "_") in _FIELD_NAMES:
             data[key] = None
-
-    # Null out obvious placeholder/template values
-    for key in list(data.keys()):
-        val = data[key]
-        if isinstance(val, str):
-            vl = val.lower()
-            if "city, state" in vl or ("city," in vl and "state" in vl) or "xyz" in vl:
-                data[key] = None
 
     # Null out country_of_origin if it's not an actual country name
     country = data.get("country_of_origin")

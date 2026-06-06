@@ -68,6 +68,10 @@
             <label class="block text-xs text-gray-500 mb-1">Government Warning</label>
             <textarea id="government_warning" rows="3" class="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"></textarea>
           </div>
+          <div>
+            <label class="block text-xs text-gray-500 mb-1">Sulfite Declaration <span class="text-gray-400">(wine only)</span></label>
+            <input id="contains_sulfites" type="text" placeholder="e.g. CONTAINS SULFITES" class="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+          </div>
         </div>
         <button id="verify-btn"
           class="mt-4 w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded disabled:opacity-50"
@@ -97,11 +101,12 @@
   </main>
 
   <script>
-    const FIELDS = ['brand_name','class_type','alcohol_content','net_contents','producer_name_address','country_of_origin','government_warning'];
+    const FIELDS = ['brand_name','class_type','alcohol_content','net_contents','producer_name_address','country_of_origin','government_warning','contains_sulfites'];
     const FIELD_LABELS = {
       brand_name: 'Brand Name', class_type: 'Class / Type', alcohol_content: 'Alcohol Content',
       net_contents: 'Net Contents', producer_name_address: 'Producer Name & Address',
-      country_of_origin: 'Country of Origin', government_warning: 'Government Warning'
+      country_of_origin: 'Country of Origin', government_warning: 'Government Warning',
+      contains_sulfites: 'Sulfite Declaration'
     };
     const STATUS_STYLE = {
       pass: 'text-green-600 font-semibold', fail: 'text-red-600 font-semibold',

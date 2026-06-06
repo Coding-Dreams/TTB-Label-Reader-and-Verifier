@@ -24,6 +24,7 @@ _jobs: Dict[str, dict] = {}
 _CSV_FIELDS = [
     "image_filename", "brand_name", "class_type", "alcohol_content",
     "net_contents", "producer_name_address", "country_of_origin", "government_warning",
+    "contains_sulfites",
 ]
 
 
@@ -113,6 +114,7 @@ async def _process_batch(job_id: str, rows: list, saved_images: Dict[str, Path])
                 producer_name_address=row.get("producer_name_address") or None,
                 country_of_origin=row.get("country_of_origin") or None,
                 government_warning=row.get("government_warning") or None,
+                contains_sulfites=row.get("contains_sulfites") or None,
             )
             extracted = await extract_label_fields(image_path)
             result = compare_label(extracted, form_data)

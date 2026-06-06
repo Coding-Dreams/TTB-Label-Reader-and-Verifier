@@ -107,7 +107,7 @@ def test_abv_field_name_is_correct():
     assert result.field == "alcohol_content"
 
 
-from app.services.comparator import check_net_contents, check_exact_field, compare_label
+from app.services.comparator import check_net_contents, check_exact_field, check_sulfites, compare_label
 from app.models.label import LabelFields
 
 
@@ -146,6 +146,27 @@ def test_exact_field_not_detected_when_none():
     assert result.status == FieldStatus.NOT_DETECTED
 
 
+def test_sulfites_passes_when_both_declare():
+    result = check_sulfites("CONTAINS SULFITES", "Contains Sulfites")
+    assert result.status == FieldStatus.PASS
+    assert result.field == "contains_sulfites"
+
+
+def test_sulfites_not_detected_when_label_missing():
+    result = check_sulfites(None, "Contains Sulfites")
+    assert result.status == FieldStatus.NOT_DETECTED
+
+
+def test_sulfites_fails_when_label_has_but_submission_omits():
+    result = check_sulfites("CONTAINS SULFITES", None)
+    assert result.status == FieldStatus.FAIL
+
+
+def test_sulfites_not_detected_when_neither_declares():
+    result = check_sulfites(None, None)
+    assert result.status == FieldStatus.NOT_DETECTED
+
+
 def test_compare_label_all_pass():
     warning = "GOVERNMENT WARNING: According to the Surgeon General, women should not drink alcoholic beverages during pregnancy because of the risk of birth defects."
     extracted = LabelFields(
@@ -156,6 +177,7 @@ def test_compare_label_all_pass():
         producer_name_address="Old Tom Distillery, Louisville, KY",
         country_of_origin="United States",
         government_warning=warning,
+        contains_sulfites=None,
     )
     form_data = LabelFields(
         brand_name="OLD TOM DISTILLERY",
@@ -165,10 +187,12 @@ def test_compare_label_all_pass():
         producer_name_address="Old Tom Distillery, Louisville, KY",
         country_of_origin="United States",
         government_warning=warning,
+        contains_sulfites=None,
     )
     result = compare_label(extracted, form_data)
     assert result.overall_pass is True
-    assert all(f.status == FieldStatus.PASS for f in result.fields)
+    # contains_sulfites is NOT_DETECTED (no sulfite declaration on label — expected for spirits)
+    assert all(f.status != FieldStatus.FAIL for f in result.fields)
 
 
 def test_compare_label_fails_on_bad_warning():

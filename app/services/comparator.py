@@ -151,6 +151,24 @@ def check_exact_field(
     )
 
 
+def check_sulfites(extracted: Optional[str], submitted: Optional[str]) -> FieldResult:
+    if extracted is None:
+        return FieldResult(
+            field="contains_sulfites",
+            status=FieldStatus.NOT_DETECTED,
+            extracted_value=None,
+            submitted_value=submitted,
+        )
+    sub_has = bool(submitted and "sulfite" in submitted.lower())
+    passes = sub_has
+    return FieldResult(
+        field="contains_sulfites",
+        status=FieldStatus.PASS if passes else FieldStatus.FAIL,
+        extracted_value=extracted,
+        submitted_value=submitted,
+    )
+
+
 def compare_label(extracted: LabelFields, form_data: LabelFields) -> VerificationResult:
     results = [
         check_fuzzy_field("brand_name", extracted.brand_name, form_data.brand_name, threshold=90),
@@ -160,6 +178,7 @@ def compare_label(extracted: LabelFields, form_data: LabelFields) -> Verificatio
         check_fuzzy_field("producer_name_address", extracted.producer_name_address, form_data.producer_name_address, threshold=80, partial=True),
         check_exact_field("country_of_origin", extracted.country_of_origin, form_data.country_of_origin),
         check_government_warning(extracted.government_warning, form_data.government_warning),
+        check_sulfites(extracted.contains_sulfites, form_data.contains_sulfites),
     ]
     overall_pass = all(r.status != FieldStatus.FAIL for r in results)
     return VerificationResult(overall_pass=overall_pass, fields=results)

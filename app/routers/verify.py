@@ -44,6 +44,7 @@ async def verify(
     producer_name_address: str = Form(default=""),
     country_of_origin: str = Form(default=""),
     government_warning: str = Form(default=""),
+    contains_sulfites: str = Form(default=""),
 ):
     tmp = _UPLOAD_DIR / f"tmp_{uuid.uuid4()}_{image.filename}"
     try:
@@ -59,6 +60,7 @@ async def verify(
             producer_name_address=producer_name_address or None,
             country_of_origin=country_of_origin or None,
             government_warning=government_warning or None,
+            contains_sulfites=contains_sulfites or None,
         )
         result = compare_label(extracted, form_data)
         save_verification(
