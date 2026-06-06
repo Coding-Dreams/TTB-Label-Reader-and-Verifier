@@ -1,0 +1,26 @@
+import re
+from typing import Optional
+from thefuzz import fuzz
+from app.models.label import LabelFields
+from app.models.result import FieldResult, FieldStatus, VerificationResult
+
+_REQUIRED_WARNING_PREFIX = "GOVERNMENT WARNING:"
+
+
+def check_government_warning(
+    extracted: Optional[str], submitted: Optional[str]
+) -> FieldResult:
+    if extracted is None:
+        return FieldResult(
+            field="government_warning",
+            status=FieldStatus.NOT_DETECTED,
+            extracted_value=None,
+            submitted_value=submitted,
+        )
+    passes = _REQUIRED_WARNING_PREFIX in extracted
+    return FieldResult(
+        field="government_warning",
+        status=FieldStatus.PASS if passes else FieldStatus.FAIL,
+        extracted_value=extracted,
+        submitted_value=submitted,
+    )
