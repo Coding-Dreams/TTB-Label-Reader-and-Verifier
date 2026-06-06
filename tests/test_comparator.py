@@ -35,3 +35,40 @@ def test_government_warning_fails_when_substring_absent():
         submitted="GOVERNMENT WARNING: ...",
     )
     assert result.status == FieldStatus.FAIL
+
+
+from app.services.comparator import check_fuzzy_field
+
+
+def test_fuzzy_brand_name_passes_case_variation():
+    result = check_fuzzy_field("brand_name", "STONE'S THROW", "Stone's Throw", threshold=90)
+    assert result.status == FieldStatus.PASS
+
+
+def test_fuzzy_brand_name_passes_exact():
+    result = check_fuzzy_field("brand_name", "OLD TOM DISTILLERY", "OLD TOM DISTILLERY", threshold=90)
+    assert result.status == FieldStatus.PASS
+
+
+def test_fuzzy_brand_name_warns_on_near_miss():
+    # "OLD TOM DISTELRY" scores 88 with fuzz.ratio vs "OLD TOM DISTILLERY" — in the warn range [70, 90)
+    result = check_fuzzy_field("brand_name", "OLD TOM DISTELRY", "OLD TOM DISTILLERY", threshold=90)
+    assert result.status == FieldStatus.WARN
+    assert result.score is not None
+    assert 70 <= result.score < 90
+
+
+def test_fuzzy_brand_name_fails_on_mismatch():
+    result = check_fuzzy_field("brand_name", "BLUE RIDGE", "OLD TOM DISTILLERY", threshold=90)
+    assert result.status == FieldStatus.FAIL
+
+
+def test_fuzzy_returns_not_detected_when_extracted_is_none():
+    result = check_fuzzy_field("brand_name", None, "OLD TOM DISTILLERY", threshold=90)
+    assert result.status == FieldStatus.NOT_DETECTED
+    assert result.extracted_value is None
+
+
+def test_fuzzy_field_name_preserved():
+    result = check_fuzzy_field("class_type", "Kentucky Bourbon", "Kentucky Bourbon", threshold=85)
+    assert result.field == "class_type"
