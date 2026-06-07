@@ -130,14 +130,14 @@ async def extract_label_fields(
                 data["contains_sulfites"] = await _extract_sulfites(client, sulfite_b64)
             if not data.get("brand_name"):
                 data["brand_name"] = await _extract_brand_name(client, image_b64)
-            # Re-check class_type using the front panel at higher resolution when the
-            # main prompt returns "Malt Beverage" — flavored vodka products in cans/pouches
-            # are commonly misclassified because the VODKA subtitle is small in the stitched image.
-            if not data.get("class_type") or data.get("class_type") == "Malt Beverage":
-                front_b64 = await loop.run_in_executor(None, _encode_image, image_path, 1024)
-                class_from_front = await _extract_class_type(client, front_b64)
-                if class_from_front:
-                    data["class_type"] = class_from_front
+            # Always re-extract class_type from the front panel using the dedicated prompt.
+            # The full prompt runs on the stitched image where each panel is half-width; the
+            # dedicated function on the front panel alone is more reliable and applies equally
+            # to every label regardless of what the full prompt returned.
+            front_b64 = await loop.run_in_executor(None, _encode_image, image_path, 1024)
+            class_from_front = await _extract_class_type(client, front_b64)
+            if class_from_front:
+                data["class_type"] = class_from_front
             # If net_contents not found in main pass, try a targeted back-panel lookup
             if not data.get("net_contents") and back_b64:
                 data["net_contents"] = await _extract_net_contents(client, back_b64)
