@@ -32,7 +32,7 @@ GROUND_TRUTH = {
         "class_type":           ("Red Wine", 70),
         "alcohol_content":      ("13%", 80),
         "net_contents":         ("750", 80),
-        "producer_name_address":("XYZ Cellars", 70),
+        "producer_name_address":("XYZ Cellars, CITY, STATE", 70),
         "country_of_origin":    ("", 90),       # not required for domestic wine
         "contains_sulfites":    ("CONTAINS SULFITES", 70),
         "government_warning":   ("GOVERNMENT WARNING:", 70),
@@ -42,7 +42,7 @@ GROUND_TRUTH = {
         "class_type":           ("Rum", 70),
         "alcohol_content":      ("18%", 80),
         "net_contents":         ("200", 80),
-        "producer_name_address":("12345 IMPORTS", 70),
+        "producer_name_address":("12345 IMPORTS, MIAMI, FL", 70),
         "country_of_origin":    ("Canada", 90),
         "contains_sulfites":    ("", 70),        # rum — no sulfite declaration
         "government_warning":   ("GOVERNMENT WARNING:", 70),
@@ -52,7 +52,7 @@ GROUND_TRUTH = {
         "class_type":           ("Ale", 70),
         "alcohol_content":      ("5%", 80),
         "net_contents":         ("PINT", 70),
-        "producer_name_address":("MALT & HOP", 70),
+        "producer_name_address":("MALT & HOP, HYATTSVILLE, MD", 70),
         "country_of_origin":    ("", 90),       # not required for domestic beer
         "contains_sulfites":    ("", 70),        # ale — no sulfite declaration
         "government_warning":   ("GOVERNMENT WARNING:", 70),

@@ -6,6 +6,7 @@ import re
 import base64
 import json
 import unicodedata
+from typing import Optional
 import httpx
 from pathlib import Path
 from PIL import Image
@@ -43,7 +44,7 @@ Rules:
 - net_contents: the volume as printed (e.g. "750 ML", "1 PINT")
 - contains_sulfites: search ALL panels for any sulfite statement (e.g. "CONTAINS SULFITES", "Contains Sulfating Agents"); return the exact text if found, null if absent
 - producer_name_address: the COMPLETE producer/bottler/importer entry as printed — capture BOTH the company name AND the full location (city, state/country) as one value (e.g. "ABC DISTILLERY FREDERICK, MD", "IMPORTED BY: 12345 IMPORTS MIAMI, FL"); do NOT return just the name or just the address alone
-- country_of_origin: the country name only (e.g. "Canada", "United States") — NOT a city or US state
+- country_of_origin: the country name, but ONLY if explicitly stated as the product's origin (e.g. "Product of Canada", "Made in Germany", "Imported from France"). Do NOT infer from the beverage category or style name — "American Red Wine" does NOT mean country_of_origin is "United States"
 - government_warning: the COMPLETE warning text EXACTLY as printed, including the "GOVERNMENT WARNING:" heading if present"""
 
 
@@ -84,7 +85,35 @@ async def extract_label_fields(image_path: Path) -> LabelFields:
         image_b64 = await loop.run_in_executor(None, _encode_image, image_path)
         raw = await _call_ollama(client, image_b64, _FULL_PROMPT)
         data = _postprocess(_parse_json(raw))
+        if not data.get("contains_sulfites"):
+            data["contains_sulfites"] = await _extract_sulfites(client, image_b64)
         return LabelFields(**data)
+
+
+async def _extract_sulfites(client: httpx.AsyncClient, image_b64: str) -> Optional[str]:
+    resp = await client.post(
+        f"{OLLAMA_BASE_URL}/api/chat",
+        json={
+            "model": MODEL,
+            "messages": [{"role": "user",
+                "content": (
+                    'Look at this alcohol label image carefully. '
+                    'Search every panel for any text mentioning sulfites, such as '
+                    '"CONTAINS SULFITES", "Contains Sulfating Agents", or similar. '
+                    'Reply with just that exact text if you find it, or reply with '
+                    'the single word "none" if no sulfite statement is present.'
+                ),
+                "images": [image_b64]}],
+            "stream": False,
+            "keep_alive": -1,
+            "options": {"temperature": 0.1},
+        },
+    )
+    resp.raise_for_status()
+    result = resp.json()["message"]["content"].strip()
+    if result.lower() in _NULL_SENTINELS or result.lower() in ("no", "not found", "not present", "absent"):
+        return None
+    return result
 
 
 async def _call_ollama(
@@ -159,6 +188,14 @@ def _postprocess(data: dict) -> dict:
             data["country_of_origin"] = None
         elif country.strip().lower() in _INVALID_COUNTRIES:
             data["country_of_origin"] = None
+        else:
+            # Reject if country appears to be inferred from the class/type descriptor
+            # (e.g. model returning "United States" because label says "American Red Wine")
+            class_type = (data.get("class_type") or "").lower()
+            if country.strip().lower() in ("united states", "america") and (
+                "american" in class_type or "domestic" in class_type
+            ):
+                data["country_of_origin"] = None
 
     # Ensure government_warning includes the required prefix
     gw = data.get("government_warning")
@@ -176,5 +213,18 @@ def _postprocess(data: dict) -> dict:
                         break
                 if data.get("contains_sulfites"):
                     break
+
+    # Fallback: derive brand_name from producer_name_address when model returns null
+    # (e.g. "IMPORTED BY: 12345 IMPORTS MIAMI, FL" → "12345 IMPORTS")
+    if not data.get("brand_name") and data.get("producer_name_address"):
+        producer = data["producer_name_address"]
+        stripped = re.sub(
+            r'^\s*(?:BOTTLED|IMPORTED|PRODUCED|DISTRIBUTED|BREWED|PACKED)\s+BY:?\s*',
+            '', producer, flags=re.IGNORECASE,
+        ).strip()
+        # Remove trailing "CITY, ST" or "CITY, COUNTRY" address suffix
+        name_part = re.sub(r',?\s+[\w\s]+,\s+[A-Z]{2}\s*$', '', stripped).strip()
+        if name_part and name_part != stripped and len(name_part) > 2:
+            data["brand_name"] = name_part
 
     return data
