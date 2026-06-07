@@ -10,7 +10,7 @@ import unicodedata
 from typing import Optional
 import httpx
 from pathlib import Path
-from PIL import Image
+from PIL import Image, ImageEnhance
 
 from app.models.label import LabelFields
 
@@ -49,10 +49,13 @@ Rules:
 - government_warning: the COMPLETE warning text EXACTLY as printed, including the "GOVERNMENT WARNING:" heading if present"""
 
 
-def _encode_image(image_path: Path, max_side: int = _MAX_SIDE) -> str:
+def _encode_image(image_path: Path, max_side: int = _MAX_SIDE, enhance: bool = False) -> str:
     with Image.open(image_path) as img:
         if img.mode in ("RGBA", "LA", "P"):
             img = img.convert("RGB")
+        if enhance:
+            img = ImageEnhance.Contrast(img).enhance(1.8)
+            img = ImageEnhance.Sharpness(img).enhance(1.5)
         w, h = img.size
         if max(w, h) > max_side:
             scale = max_side / max(w, h)
@@ -127,7 +130,7 @@ async def extract_label_fields(
             # Encode at higher resolution for the dedicated sulfite scan — small-print
             # declarations are frequently missed at the default 768px.
             if back_image_path and back_image_path.exists():
-                sulfite_b64 = await loop.run_in_executor(None, _encode_image, back_image_path, 1024)
+                sulfite_b64 = await loop.run_in_executor(None, _encode_image, back_image_path, 1024, True)
             else:
                 sulfite_b64 = image_b64
             if not data.get("contains_sulfites"):
