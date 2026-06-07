@@ -127,6 +127,12 @@ async def extract_label_fields(
                 data["brand_name"] = await _extract_brand_name(client, image_b64)
             if not data.get("class_type"):
                 data["class_type"] = await _extract_class_type(client, image_b64)
+            # If producer looks foreign (no US state at end), check for a US importer
+            producer = data.get("producer_name_address")
+            if isinstance(producer, str) and not _US_ADDRESS_TAIL_RE.search(producer):
+                importer = await _extract_importer(client, image_b64)
+                if importer:
+                    data["producer_name_address"] = importer
             return LabelFields(**data)
     finally:
         if stitched:
@@ -215,6 +221,35 @@ async def _extract_sulfites(client: httpx.AsyncClient, image_b64: str) -> Option
     return result
 
 
+async def _extract_importer(client: httpx.AsyncClient, image_b64: str) -> Optional[str]:
+    resp = await client.post(
+        f"{OLLAMA_BASE_URL}/api/chat",
+        json={
+            "model": MODEL,
+            "messages": [{"role": "user",
+                "content": (
+                    "Look at this alcohol beverage label carefully. "
+                    "Is there a US IMPORTER, BOTTLER, or DISTRIBUTOR listed? "
+                    "Look for phrases like 'IMPORTED BY:', 'BOTTLED BY:', 'SOLE IMPORTER:', "
+                    "'DISTRIBUTED BY:', or a US company name with a US city and two-letter state. "
+                    "If found, return the COMPLETE entry — company name AND full US address — exactly as printed. "
+                    "If no US importer or bottler is listed, reply with the single word 'none'."
+                ),
+                "images": [image_b64]}],
+            "stream": False,
+            "keep_alive": -1,
+            "options": {"temperature": 0.1},
+        },
+    )
+    resp.raise_for_status()
+    result = resp.json()["message"]["content"].strip().split("\n")[0].strip()
+    if result.lower() in _NULL_SENTINELS or result.lower() in ("no", "not found", "not present", "not listed"):
+        return None
+    # Only accept if it contains a US address tail — guards against the model
+    # returning the foreign producer again or a generic non-address string
+    return result if _US_ADDRESS_TAIL_RE.search(result) else None
+
+
 async def _call_ollama(
     client: httpx.AsyncClient, image_b64: str, prompt: str
 ) -> str:
@@ -286,6 +321,12 @@ _COMPANY_TYPE_RE = re.compile(
 _ORIGIN_PREFIX_RE = re.compile(
     r'^(?:produced?\s+in|product\s+of|made\s+in|imported?\s+from)\s+',
     re.IGNORECASE,
+)
+
+# Matches a US address tail: ", ST" or ", ST 12345" (2-letter state, optional ZIP)
+# Used to detect whether an extracted producer address is domestic or foreign
+_US_ADDRESS_TAIL_RE = re.compile(
+    r',\s*[A-Z]\.?[A-Z]\.?(?:\s+\d{5}(?:-\d{4})?)?\s*$'
 )
 
 
