@@ -189,10 +189,13 @@ def test_verify_passes_with_truth_data(api, folder):
     assert resp.status_code == 200, f"Verify failed: {resp.text}"
     result = resp.json()
 
-    failing = [f["field"] for f in result["fields"] if f["status"] == "fail"]
+    failing_details = [
+        f"  {f['field']}: got '{f.get('extracted_value')}' expected '{f.get('submitted_value')}'"
+        for f in result["fields"] if f["status"] == "fail"
+    ]
     if expected_overall:
         if not result["overall_pass"]:
-            pytest.fail(f"{folder.name} — expected overall pass but got failures: {failing}")
+            pytest.fail(f"{folder.name} — expected overall pass but got failures:\n" + "\n".join(failing_details))
     else:
         if result["overall_pass"]:
             pytest.fail(f"{folder.name} — expected overall FAIL (non-compliant label) but got pass")
