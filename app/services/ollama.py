@@ -149,10 +149,6 @@ async def extract_label_fields(
             if isinstance(producer, str) and not _US_ADDRESS_TAIL_RE.search(producer):
                 importer = await _extract_importer(client, importer_b64)
                 data["producer_name_address"] = importer
-            # Wine default: TTB requires sulfite declaration for wines >=10 ppm; if no
-            # statement found (neither positive nor negative), assume CONTAINS SULFITES
-            if not data.get("contains_sulfites") and data.get("class_type") == "Wine":
-                data["contains_sulfites"] = "CONTAINS SULFITES"
             return LabelFields(**data)
     finally:
         if stitched:
