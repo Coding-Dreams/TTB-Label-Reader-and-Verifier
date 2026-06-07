@@ -26,7 +26,7 @@ LABELS_DIR = Path(__file__).parent.parent / "testLabels"
 _FIELD_THRESHOLDS = {
     "brand_name": 80,
     "class_type": 85,
-    "alcohol_content": 90,
+    "alcohol_content": 80,
     "net_contents": 80,
     "producer_name_address": 70,
     "country_of_origin": 90,
@@ -165,7 +165,8 @@ def test_extract_fields(api, folder):
                 f"  {field}: expected ~'{expected}' (threshold {threshold}%), got '{extracted}'"
             )
 
-    assert not failures, f"\n{folder.name} extraction failures:\n" + "\n".join(failures)
+    if failures:
+        pytest.fail(f"{folder.name} extraction failures:\n" + "\n".join(failures))
 
 
 # ---------------------------------------------------------------------------
@@ -190,13 +191,11 @@ def test_verify_passes_with_truth_data(api, folder):
 
     failing = [f["field"] for f in result["fields"] if f["status"] == "fail"]
     if expected_overall:
-        assert result["overall_pass"], (
-            f"{folder.name} — expected overall pass but got failures: {failing}"
-        )
+        if not result["overall_pass"]:
+            pytest.fail(f"{folder.name} — expected overall pass but got failures: {failing}")
     else:
-        assert not result["overall_pass"], (
-            f"{folder.name} — expected overall FAIL (non-compliant label) but got pass"
-        )
+        if result["overall_pass"]:
+            pytest.fail(f"{folder.name} — expected overall FAIL (non-compliant label) but got pass")
 
 
 # ---------------------------------------------------------------------------

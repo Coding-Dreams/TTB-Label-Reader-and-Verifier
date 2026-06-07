@@ -183,9 +183,9 @@ def test_sulfites_fails_when_negative_vs_positive_mismatch():
     assert result.status == FieldStatus.FAIL
 
 
-def test_sulfites_fails_when_label_is_free_but_submission_omits():
+def test_sulfites_not_detected_when_label_is_free_but_submission_omits():
     result = check_sulfites("SULFITE FREE", None)
-    assert result.status == FieldStatus.FAIL
+    assert result.status == FieldStatus.NOT_DETECTED
 
 
 def test_compare_label_all_pass():

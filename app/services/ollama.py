@@ -42,7 +42,7 @@ Rules:
 - brand_name: the label/product name printed on the front that identifies this specific product (e.g. "ABC Single Barrel", "Honey Huckleberry Pie", "12345 Imports") — often the most prominent or stylistic name; do NOT capture the producer, brewery, winery, or distillery company name
 - class_type: EXACTLY one of three values — "Wine", "Malt Beverage", or "Distilled Spirits" — based on what category of alcohol this is. Wine = grape/fruit wines, champagne, prosecco, cider. Malt Beverage = beer, ale, lager, stout, porter, IPA, hard seltzer. Distilled Spirits = whiskey, bourbon, rum, vodka, gin, tequila, brandy, liqueur, and similar spirits
 - alcohol_content: the ABV percentage as printed (e.g. "45% ALC/VOL", "13% BY VOL")
-- net_contents: the volume as printed (e.g. "750 ML", "1 PINT")
+- net_contents: the TOTAL container size (e.g. "750 ML", "100 mL", "1 PINT") — the full bottle/can volume, NOT the alcohol-per-serving amount
 - contains_sulfites: search ALL panels for any sulfite statement — this includes BOTH positive declarations (e.g. "CONTAINS SULFITES", "Contains Sulfating Agents") AND negative declarations (e.g. "SULFITE FREE", "NO SULFITES ADDED", "Contains No Detectable Sulfites"); return the exact text if found, null if absent
 - producer_name_address: the COMPLETE producer/bottler/importer entry as printed — capture BOTH the company name AND the full location (city, state/country) as one value (e.g. "ABC DISTILLERY FREDERICK, MD", "IMPORTED BY: 12345 IMPORTS MIAMI, FL"); do NOT return just the name or just the address alone; if BOTH a foreign producer AND a US importer/bottler/distributor are listed, return the IMPORTER/BOTTLER/DISTRIBUTOR entry — NOT the foreign producer
 - country_of_origin: the country name, but ONLY if explicitly stated as the product's origin (e.g. "Product of Canada", "Made in Germany", "Imported from France"). Do NOT infer from the beverage category or style name — "American Red Wine" does NOT mean country_of_origin is "United States"
@@ -121,11 +121,7 @@ async def extract_label_fields(
 
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
             loop = asyncio.get_event_loop()
-            # Stitched images use higher resolution to preserve fine text on both panels
-            encode_max = 1536 if stitched else _MAX_SIDE
-            image_b64 = await loop.run_in_executor(
-                None, _encode_image, effective_path, encode_max
-            )
+            image_b64 = await loop.run_in_executor(None, _encode_image, effective_path)
             raw = await _call_ollama(client, image_b64, _FULL_PROMPT)
             data = _postprocess(_parse_json(raw))
             # Back panel often carries sulfite statements and regulatory text
@@ -244,12 +240,15 @@ async def _extract_importer(client: httpx.AsyncClient, image_b64: str) -> Option
             "model": MODEL,
             "messages": [{"role": "user",
                 "content": (
-                    "Look at this alcohol beverage label carefully. "
-                    "Is there a US IMPORTER, BOTTLER, or DISTRIBUTOR listed? "
-                    "Look for phrases like 'IMPORTED BY:', 'BOTTLED BY:', 'SOLE IMPORTER:', "
-                    "'DISTRIBUTED BY:', or a US company name with a US city and two-letter state. "
-                    "If found, return the COMPLETE entry — company name AND full US address — exactly as printed. "
-                    "If no US importer or bottler is listed, reply with the single word 'none'."
+                    "Look at this alcohol beverage label. "
+                    "Find any US IMPORTER, BOTTLER, or DISTRIBUTOR — a company located inside the United States. "
+                    "IGNORE all foreign producers, wineries, distilleries, and any company outside the US. "
+                    "A valid US entry has a company name AND a US city AND a 2-letter state abbreviation "
+                    "(e.g. ', NY', ', CA', ', FL', ', OR', ', TX'). "
+                    "Look for key phrases: 'IMPORTED BY:', 'SOLE IMPORTER:', 'IMPORTED AND BOTTLED BY:', "
+                    "'BOTTLED BY:', 'DISTRIBUTED BY:', or a US company address printed in small text. "
+                    "Return the complete entry exactly as printed on the label. "
+                    "If no US importer or bottler is present, reply with exactly: none"
                 ),
                 "images": [image_b64]}],
             "stream": False,
