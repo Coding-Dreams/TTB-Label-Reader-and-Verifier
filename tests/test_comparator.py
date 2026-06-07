@@ -157,9 +157,10 @@ def test_sulfites_not_detected_when_label_missing():
     assert result.status == FieldStatus.NOT_DETECTED
 
 
-def test_sulfites_fails_when_label_has_but_submission_omits():
+def test_sulfites_not_detected_when_submitted_is_none():
+    # submitted=None means "not provided" — treated as NOT_DETECTED, not a FAIL
     result = check_sulfites("CONTAINS SULFITES", None)
-    assert result.status == FieldStatus.FAIL
+    assert result.status == FieldStatus.NOT_DETECTED
 
 
 def test_sulfites_not_detected_when_neither_declares():

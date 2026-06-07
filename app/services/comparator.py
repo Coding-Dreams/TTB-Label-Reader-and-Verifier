@@ -49,10 +49,10 @@ def check_fuzzy_field(
             extracted_value=None,
             submitted_value=submitted,
         )
-    if submitted is None:
+    if not submitted:  # None or empty string — field not provided, skip verification
         return FieldResult(
             field=field,
-            status=FieldStatus.FAIL,
+            status=FieldStatus.NOT_DETECTED,
             extracted_value=extracted,
             submitted_value=None,
         )
@@ -144,10 +144,10 @@ def check_exact_field(
             extracted_value=None,
             submitted_value=submitted,
         )
-    if submitted is None:
+    if not submitted:  # None or empty string — field not provided, skip verification
         return FieldResult(
             field=field,
-            status=FieldStatus.FAIL,
+            status=FieldStatus.NOT_DETECTED,
             extracted_value=extracted,
             submitted_value=None,
         )
@@ -168,8 +168,14 @@ def check_sulfites(extracted: Optional[str], submitted: Optional[str]) -> FieldR
             extracted_value=None,
             submitted_value=submitted,
         )
-    sub_declares = bool(submitted and "sulfite" in submitted.lower())
-    if not sub_declares:
+    if not submitted:  # None or empty string — not provided, skip verification
+        return FieldResult(
+            field="contains_sulfites",
+            status=FieldStatus.NOT_DETECTED,
+            extracted_value=extracted,
+            submitted_value=None,
+        )
+    if "sulfite" not in submitted.lower():
         return FieldResult(
             field="contains_sulfites",
             status=FieldStatus.FAIL,

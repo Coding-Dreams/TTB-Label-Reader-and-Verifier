@@ -117,8 +117,12 @@ def _field_matches(extracted, expected, threshold: int) -> bool:
 _METADATA_KEYS = {"expected_overall"}
 
 def _truth_as_form(truth: dict) -> dict:
-    """Convert a truth dict to form-data values (None → empty string), excluding metadata keys."""
-    return {k: (v if v is not None else "") for k, v in truth.items() if k not in _METADATA_KEYS}
+    """Return only fields with real values — None and '' mean 'not provided', so omit them."""
+    return {
+        k: v
+        for k, v in truth.items()
+        if k not in _METADATA_KEYS and v is not None and v != ""
+    }
 
 
 # ---------------------------------------------------------------------------

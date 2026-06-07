@@ -49,13 +49,13 @@ Rules:
 - government_warning: the COMPLETE warning text EXACTLY as printed, including the "GOVERNMENT WARNING:" heading if present"""
 
 
-def _encode_image(image_path: Path) -> str:
+def _encode_image(image_path: Path, max_side: int = _MAX_SIDE) -> str:
     with Image.open(image_path) as img:
         if img.mode in ("RGBA", "LA", "P"):
             img = img.convert("RGB")
         w, h = img.size
-        if max(w, h) > _MAX_SIDE:
-            scale = _MAX_SIDE / max(w, h)
+        if max(w, h) > max_side:
+            scale = max_side / max(w, h)
             img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=90)
@@ -107,30 +107,40 @@ async def extract_label_fields(
 ) -> LabelFields:
     stitched: Optional[Path] = None
     try:
+        back_b64: Optional[str] = None
         if back_image_path and back_image_path.exists():
             loop = asyncio.get_event_loop()
             stitched = await loop.run_in_executor(
                 None, _stitch_images, image_path, back_image_path
             )
             effective_path = stitched
+            # Encode back panel separately at full resolution for targeted second-pass lookups
+            back_b64 = await loop.run_in_executor(None, _encode_image, back_image_path)
         else:
             effective_path = image_path
 
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
             loop = asyncio.get_event_loop()
-            image_b64 = await loop.run_in_executor(None, _encode_image, effective_path)
+            # Stitched images use higher resolution to preserve fine text on both panels
+            encode_max = 1536 if stitched else _MAX_SIDE
+            image_b64 = await loop.run_in_executor(
+                None, _encode_image, effective_path, encode_max
+            )
             raw = await _call_ollama(client, image_b64, _FULL_PROMPT)
             data = _postprocess(_parse_json(raw))
+            # Back panel often carries sulfite statements and regulatory text
+            sulfite_b64 = back_b64 or image_b64
             if not data.get("contains_sulfites"):
-                data["contains_sulfites"] = await _extract_sulfites(client, image_b64)
+                data["contains_sulfites"] = await _extract_sulfites(client, sulfite_b64)
             if not data.get("brand_name"):
                 data["brand_name"] = await _extract_brand_name(client, image_b64)
             if not data.get("class_type"):
                 data["class_type"] = await _extract_class_type(client, image_b64)
-            # If producer looks foreign (no US state at end), check for a US importer
+            # If producer looks foreign (no US state at end), search the back panel for a US importer
+            importer_b64 = back_b64 or image_b64
             producer = data.get("producer_name_address")
             if isinstance(producer, str) and not _US_ADDRESS_TAIL_RE.search(producer):
-                importer = await _extract_importer(client, image_b64)
+                importer = await _extract_importer(client, importer_b64)
                 if importer:
                     data["producer_name_address"] = importer
             # Wine default: TTB requires sulfite declaration for wines >=10 ppm; if no
