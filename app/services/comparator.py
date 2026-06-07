@@ -171,8 +171,8 @@ def check_sulfites(extracted: Optional[str], submitted: Optional[str]) -> FieldR
 
 def compare_label(extracted: LabelFields, form_data: LabelFields) -> VerificationResult:
     results = [
-        check_fuzzy_field("brand_name", extracted.brand_name, form_data.brand_name, threshold=90),
-        check_fuzzy_field("class_type", extracted.class_type, form_data.class_type, threshold=85),
+        check_fuzzy_field("brand_name", extracted.brand_name, form_data.brand_name, threshold=90, partial=True),
+        check_fuzzy_field("class_type", extracted.class_type, form_data.class_type, threshold=85, partial=True),
         check_abv(extracted.alcohol_content, form_data.alcohol_content),
         check_net_contents(extracted.net_contents, form_data.net_contents),
         check_fuzzy_field("producer_name_address", extracted.producer_name_address, form_data.producer_name_address, threshold=80, partial=True),

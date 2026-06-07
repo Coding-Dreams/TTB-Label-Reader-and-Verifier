@@ -38,8 +38,8 @@ Required JSON format:
 
 Rules:
 - Return the exact text as it appears on the label
-- brand_name: the consumer-facing product name as printed (e.g. "ABC Single Barrel", "Honey Huckleberry Pie") — this is the specific product or label name consumers use to identify the beverage; do NOT capture the producer, brewery, winery, or distillery company name
-- class_type: the beverage category as printed (e.g. "Straight Rye Whisky", "American Red Wine", "Rum with Coconut Liqueur") — NOT the brewery or winery name
+- brand_name: the label/product name printed on the front that identifies this specific product (e.g. "ABC Single Barrel", "Honey Huckleberry Pie", "12345 Imports") — often the most prominent or stylistic name; do NOT capture the producer, brewery, winery, or distillery company name
+- class_type: the regulatory beverage category as printed (e.g. "Straight Rye Whisky", "American Red Wine", "Ale with Honey and Huckleberry Flavor", "Rum with Coconut Liqueur") — the standardized type designation; NOT the brewery or winery name
 - alcohol_content: the ABV percentage as printed (e.g. "45% ALC/VOL", "13% BY VOL")
 - net_contents: the volume as printed (e.g. "750 ML", "1 PINT")
 - contains_sulfites: search ALL panels for any sulfite statement (e.g. "CONTAINS SULFITES", "Contains Sulfating Agents"); return the exact text if found, null if absent
@@ -87,7 +87,37 @@ async def extract_label_fields(image_path: Path) -> LabelFields:
         data = _postprocess(_parse_json(raw))
         if not data.get("contains_sulfites"):
             data["contains_sulfites"] = await _extract_sulfites(client, image_b64)
+        if not data.get("brand_name"):
+            data["brand_name"] = await _extract_brand_name(client, image_b64)
         return LabelFields(**data)
+
+
+async def _extract_brand_name(client: httpx.AsyncClient, image_b64: str) -> Optional[str]:
+    resp = await client.post(
+        f"{OLLAMA_BASE_URL}/api/chat",
+        json={
+            "model": MODEL,
+            "messages": [{"role": "user",
+                "content": (
+                    "Look at this alcohol beverage label. "
+                    "What is the consumer-facing brand or product name? "
+                    "This is the specific name on the front label that identifies "
+                    "the product (for example: 'ABC Single Barrel', "
+                    "'Honey Huckleberry Pie', '12345 Imports'). "
+                    "It is NOT the producer, brewery, winery, or distillery company name. "
+                    "Reply with only that name, or 'none' if you cannot determine it."
+                ),
+                "images": [image_b64]}],
+            "stream": False,
+            "keep_alive": -1,
+            "options": {"temperature": 0.1},
+        },
+    )
+    resp.raise_for_status()
+    result = resp.json()["message"]["content"].strip().split("\n")[0].strip()
+    if result.lower() in _NULL_SENTINELS or result.lower() in ("no", "not found", "not present", "cannot determine"):
+        return None
+    return result or None
 
 
 async def _extract_sulfites(client: httpx.AsyncClient, image_b64: str) -> Optional[str]:
@@ -189,11 +219,18 @@ def _postprocess(data: dict) -> dict:
         elif country.strip().lower() in _INVALID_COUNTRIES:
             data["country_of_origin"] = None
         else:
-            # Reject if country appears to be inferred from the class/type descriptor
-            # (e.g. model returning "United States" because label says "American Red Wine")
+            country_lower = country.strip().lower()
             class_type = (data.get("class_type") or "").lower()
-            if country.strip().lower() in ("united states", "america") and (
+            producer = (data.get("producer_name_address") or "").lower()
+            # Reject US inferred from the beverage category name
+            if country_lower in ("united states", "america") and (
                 "american" in class_type or "domestic" in class_type
+            ):
+                data["country_of_origin"] = None
+            # Reject US when label shows a US-based importer — model is confusing
+            # the importer's domestic address with the product's country of origin
+            elif country_lower in ("united states", "america", "usa", "u.s.", "u.s.a.") and (
+                "import" in producer
             ):
                 data["country_of_origin"] = None
 
