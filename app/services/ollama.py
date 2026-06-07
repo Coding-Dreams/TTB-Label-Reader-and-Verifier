@@ -15,7 +15,7 @@ from PIL import Image
 from app.models.label import LabelFields
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-MODEL = "granite3.2-vision"
+MODEL = "qwen2.5vl:7b"
 TIMEOUT = 120.0
 
 _MAX_SIDE = 768  # cap large uploads before encoding
