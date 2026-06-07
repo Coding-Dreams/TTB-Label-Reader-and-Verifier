@@ -114,9 +114,11 @@ def _field_matches(extracted, expected, threshold: int) -> bool:
     return fuzz.partial_ratio(_normalize_text(str(expected)), _normalize_text(str(extracted))) >= threshold
 
 
+_METADATA_KEYS = {"expected_overall"}
+
 def _truth_as_form(truth: dict) -> dict:
-    """Convert a truth dict to form-data values (None → empty string)."""
-    return {k: (v if v is not None else "") for k, v in truth.items()}
+    """Convert a truth dict to form-data values (None → empty string), excluding metadata keys."""
+    return {k: (v if v is not None else "") for k, v in truth.items() if k not in _METADATA_KEYS}
 
 
 # ---------------------------------------------------------------------------
@@ -176,14 +178,21 @@ def test_verify_passes_with_truth_data(api, folder):
     if not truth:
         pytest.skip(f"No truth JSON in {folder.name}")
 
+    expected_overall = truth.get("expected_overall", True)
+
     resp = _verify(front, back, form_data=_truth_as_form(truth))
     assert resp.status_code == 200, f"Verify failed: {resp.text}"
     result = resp.json()
 
     failing = [f["field"] for f in result["fields"] if f["status"] == "fail"]
-    assert result["overall_pass"], (
-        f"{folder.name} — expected overall pass but got failures: {failing}"
-    )
+    if expected_overall:
+        assert result["overall_pass"], (
+            f"{folder.name} — expected overall pass but got failures: {failing}"
+        )
+    else:
+        assert not result["overall_pass"], (
+            f"{folder.name} — expected overall FAIL (non-compliant label) but got pass"
+        )
 
 
 # ---------------------------------------------------------------------------
