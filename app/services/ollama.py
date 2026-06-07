@@ -42,7 +42,7 @@ Rules:
 - alcohol_content: the ABV percentage as printed (e.g. "45% ALC/VOL", "13% BY VOL")
 - net_contents: the volume as printed (e.g. "750 ML", "1 PINT")
 - contains_sulfites: search ALL panels for any sulfite statement (e.g. "CONTAINS SULFITES", "Contains Sulfating Agents"); return the exact text if found, null if absent
-- producer_name_address: the producer, bottler, or importer name and address as printed
+- producer_name_address: the COMPLETE producer/bottler/importer entry as printed — capture BOTH the company name AND the full location (city, state/country) as one value (e.g. "ABC DISTILLERY FREDERICK, MD", "IMPORTED BY: 12345 IMPORTS MIAMI, FL"); do NOT return just the name or just the address alone
 - country_of_origin: the country name only (e.g. "Canada", "United States") — NOT a city or US state
 - government_warning: the COMPLETE warning text EXACTLY as printed, including the "GOVERNMENT WARNING:" heading if present"""
 
