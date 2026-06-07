@@ -106,10 +106,10 @@ async def extract_label_fields(
     image_path: Path, back_image_path: Optional[Path] = None
 ) -> LabelFields:
     stitched: Optional[Path] = None
+    loop = asyncio.get_running_loop()
     try:
         back_b64: Optional[str] = None
         if back_image_path and back_image_path.exists():
-            loop = asyncio.get_event_loop()
             stitched = await loop.run_in_executor(
                 None, _stitch_images, image_path, back_image_path
             )
@@ -120,7 +120,6 @@ async def extract_label_fields(
             effective_path = image_path
 
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-            loop = asyncio.get_event_loop()
             image_b64 = await loop.run_in_executor(None, _encode_image, effective_path)
             raw = await _call_ollama(client, image_b64, _FULL_PROMPT)
             data = _postprocess(_parse_json(raw))
@@ -138,9 +137,10 @@ async def extract_label_fields(
             class_from_front = await _extract_class_type(client, front_b64)
             if class_from_front:
                 data["class_type"] = class_from_front
-            # If net_contents not found in main pass, try a targeted back-panel lookup
-            if not data.get("net_contents") and back_b64:
-                data["net_contents"] = await _extract_net_contents(client, back_b64)
+            # If net_contents not found in main pass, try a targeted second-pass lookup
+            if not data.get("net_contents"):
+                net_b64 = back_b64 or image_b64
+                data["net_contents"] = await _extract_net_contents(client, net_b64)
             # If producer looks foreign (no US state at end), search the back panel for a US importer.
             # Always overwrite — if no US importer found (None), clear the foreign value so the
             # comparator returns FAIL rather than passing with a wrong foreign address.
@@ -380,10 +380,24 @@ _ORIGIN_PREFIX_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Matches a US address tail: ", ST" or ", ST 12345" (2-letter state + optional ZIP)
-# or a bare 5-digit ZIP at the end (handles full state names like "LOUISIANA 70123").
+# Matches a US address tail: ", STATE" or ", STATE ZIPCODE"
+# Accepts both 2-letter abbreviations (NY, CA) and full state names (New York, California).
+# Full names prevent false negatives on labels that spell out the state.
+# Explicit name list prevents false positives on European 5-digit postal codes.
 _US_ADDRESS_TAIL_RE = re.compile(
-    r'(?:,\s*[A-Z]\.?[A-Z]\.?(?:\s+\d{5}(?:-\d{4})?)?\s*|\s+\d{5}(?:-\d{4})?\s*)$'
+    r',\s*(?:'
+    r'AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|'
+    r'NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY|DC|'
+    r'Alabama|Alaska|Arizona|Arkansas|California|Colorado|Connecticut|Delaware|'
+    r'Florida|Georgia|Hawaii|Idaho|Illinois|Indiana|Iowa|Kansas|Kentucky|Louisiana|'
+    r'Maine|Maryland|Massachusetts|Michigan|Minnesota|Mississippi|Missouri|Montana|'
+    r'Nebraska|Nevada|New\s+Hampshire|New\s+Jersey|New\s+Mexico|New\s+York|'
+    r'North\s+Carolina|North\s+Dakota|Ohio|Oklahoma|Oregon|Pennsylvania|'
+    r'Rhode\s+Island|South\s+Carolina|South\s+Dakota|Tennessee|Texas|Utah|'
+    r'Vermont|Virginia|Washington|West\s+Virginia|Wisconsin|Wyoming|'
+    r'District\s+of\s+Columbia'
+    r')(?:\s+\d{5}(?:-\d{4})?)?\s*$',
+    re.IGNORECASE
 )
 
 
@@ -463,17 +477,6 @@ def _postprocess(data: dict) -> dict:
     gw = data.get("government_warning")
     if gw and not gw.upper().lstrip().startswith("GOVERNMENT WARNING"):
         data["government_warning"] = "GOVERNMENT WARNING: " + gw.strip()
-
-    # Fallback: scan other fields for sulfite mentions the model may have misattributed
-    if not data.get("contains_sulfites"):
-        for val in data.values():
-            if isinstance(val, str) and "sulfite" in val.lower():
-                for segment in re.split(r"[\n;]", val):
-                    if "sulfite" in segment.lower():
-                        data["contains_sulfites"] = segment.strip()
-                        break
-                if data.get("contains_sulfites"):
-                    break
 
     # Null out brand_name if it's actually the producer name
     if data.get("brand_name") and data.get("producer_name_address"):
