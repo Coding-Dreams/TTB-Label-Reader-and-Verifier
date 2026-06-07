@@ -21,7 +21,7 @@ services:
     image: ollama/ollama
     volumes:
       - ollama_data:/root/.ollama
-    entrypoint: ["/bin/sh", "-c", "ollama pull qwen2.5vl:3b"]
+    entrypoint: ["/bin/sh", "-c", "ollama pull qwen2.5vl:7b"]
     environment:
       - OLLAMA_HOST=http://ollama:11434
     depends_on:
