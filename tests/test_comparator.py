@@ -21,7 +21,7 @@ def test_government_warning_fails_with_title_case():
 
 def test_government_warning_fails_when_missing_from_label():
     result = check_government_warning(extracted=None, submitted="GOVERNMENT WARNING: ...")
-    assert result.status == FieldStatus.NOT_DETECTED
+    assert result.status == FieldStatus.FAIL
 
 
 def test_government_warning_field_name_is_correct():
@@ -63,9 +63,9 @@ def test_fuzzy_brand_name_fails_on_mismatch():
     assert result.status == FieldStatus.FAIL
 
 
-def test_fuzzy_returns_not_detected_when_extracted_is_none():
+def test_fuzzy_fails_when_extracted_is_none():
     result = check_fuzzy_field("brand_name", None, "OLD TOM DISTILLERY", threshold=90)
-    assert result.status == FieldStatus.NOT_DETECTED
+    assert result.status == FieldStatus.FAIL
     assert result.extracted_value is None
 
 
@@ -97,9 +97,9 @@ def test_abv_passes_within_tolerance():
     assert result.status == FieldStatus.PASS
 
 
-def test_abv_not_detected_when_none():
+def test_abv_fails_when_extracted_is_none():
     result = check_abv(None, "45%")
-    assert result.status == FieldStatus.NOT_DETECTED
+    assert result.status == FieldStatus.FAIL
 
 
 def test_abv_field_name_is_correct():
@@ -126,9 +126,9 @@ def test_net_contents_fails_different_volume():
     assert result.status == FieldStatus.FAIL
 
 
-def test_net_contents_not_detected_when_none():
+def test_net_contents_fails_when_extracted_is_none():
     result = check_net_contents(None, "750 mL")
-    assert result.status == FieldStatus.NOT_DETECTED
+    assert result.status == FieldStatus.FAIL
 
 
 def test_exact_field_passes_case_insensitive():
@@ -141,9 +141,9 @@ def test_exact_field_fails_mismatch():
     assert result.status == FieldStatus.FAIL
 
 
-def test_exact_field_not_detected_when_none():
+def test_exact_field_fails_when_extracted_is_none():
     result = check_exact_field("country_of_origin", None, "United States")
-    assert result.status == FieldStatus.NOT_DETECTED
+    assert result.status == FieldStatus.FAIL
 
 
 def test_sulfites_passes_when_both_declare():
@@ -152,9 +152,9 @@ def test_sulfites_passes_when_both_declare():
     assert result.field == "contains_sulfites"
 
 
-def test_sulfites_not_detected_when_label_missing():
+def test_sulfites_fails_when_label_missing():
     result = check_sulfites(None, "Contains Sulfites")
-    assert result.status == FieldStatus.NOT_DETECTED
+    assert result.status == FieldStatus.FAIL
 
 
 def test_sulfites_not_detected_when_submitted_is_none():

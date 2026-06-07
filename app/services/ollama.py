@@ -130,11 +130,20 @@ async def extract_label_fields(
                 data["contains_sulfites"] = await _extract_sulfites(client, sulfite_b64)
             if not data.get("brand_name"):
                 data["brand_name"] = await _extract_brand_name(client, image_b64)
-            if not data.get("class_type"):
-                data["class_type"] = await _extract_class_type(client, image_b64)
+            # Re-check class_type using the front panel at higher resolution when the
+            # main prompt returns "Malt Beverage" — flavored vodka products in cans/pouches
+            # are commonly misclassified because the VODKA subtitle is small in the stitched image.
+            if not data.get("class_type") or data.get("class_type") == "Malt Beverage":
+                front_b64 = await loop.run_in_executor(None, _encode_image, image_path, 1024)
+                class_from_front = await _extract_class_type(client, front_b64)
+                if class_from_front:
+                    data["class_type"] = class_from_front
+            # If net_contents not found in main pass, try a targeted back-panel lookup
+            if not data.get("net_contents") and back_b64:
+                data["net_contents"] = await _extract_net_contents(client, back_b64)
             # If producer looks foreign (no US state at end), search the back panel for a US importer.
             # Always overwrite — if no US importer found (None), clear the foreign value so the
-            # comparator returns NOT_DETECTED rather than failing against a wrong address.
+            # comparator returns FAIL rather than passing with a wrong foreign address.
             importer_b64 = back_b64 or image_b64
             producer = data.get("producer_name_address")
             if isinstance(producer, str) and not _US_ADDRESS_TAIL_RE.search(producer):
@@ -269,6 +278,35 @@ async def _extract_importer(client: httpx.AsyncClient, image_b64: str) -> Option
     return result if _US_ADDRESS_TAIL_RE.search(result) else None
 
 
+async def _extract_net_contents(client: httpx.AsyncClient, image_b64: str) -> Optional[str]:
+    resp = await client.post(
+        f"{OLLAMA_BASE_URL}/api/chat",
+        json={
+            "model": MODEL,
+            "messages": [{"role": "user",
+                "content": (
+                    "Look at this alcohol beverage label. "
+                    "Find the NET CONTENTS — the TOTAL volume of liquid in the container "
+                    "(e.g. '100 mL', '750 mL', '1.75 L'). "
+                    "Look near the barcode, bottom edge, or nutrition facts panel. "
+                    "Return only the volume with units. "
+                    "If not found, reply with exactly: none"
+                ),
+                "images": [image_b64]}],
+            "stream": False,
+            "keep_alive": -1,
+            "options": {"temperature": 0.1},
+        },
+    )
+    resp.raise_for_status()
+    result = resp.json()["message"]["content"].strip().split("\n")[0].strip()
+    if result.lower() in _NULL_SENTINELS or result.lower() in ("no", "not found", "not present"):
+        return None
+    if not re.search(r'\d+\.?\d*\s*(?:ml|l\b|fl\.?\s*oz)', result, re.IGNORECASE):
+        return None
+    return result
+
+
 async def _call_ollama(
     client: httpx.AsyncClient, image_b64: str, prompt: str
 ) -> str:
@@ -342,10 +380,10 @@ _ORIGIN_PREFIX_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Matches a US address tail: ", ST" or ", ST 12345" (2-letter state, optional ZIP)
-# Used to detect whether an extracted producer address is domestic or foreign
+# Matches a US address tail: ", ST" or ", ST 12345" (2-letter state + optional ZIP)
+# or a bare 5-digit ZIP at the end (handles full state names like "LOUISIANA 70123").
 _US_ADDRESS_TAIL_RE = re.compile(
-    r',\s*[A-Z]\.?[A-Z]\.?(?:\s+\d{5}(?:-\d{4})?)?\s*$'
+    r'(?:,\s*[A-Z]\.?[A-Z]\.?(?:\s+\d{5}(?:-\d{4})?)?\s*|\s+\d{5}(?:-\d{4})?\s*)$'
 )
 
 

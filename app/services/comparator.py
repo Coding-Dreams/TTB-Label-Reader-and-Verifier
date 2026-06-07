@@ -19,10 +19,17 @@ def _sulfite_absent(text: str) -> bool:
 def check_government_warning(
     extracted: Optional[str], submitted: Optional[str]
 ) -> FieldResult:
-    if extracted is None:
+    if not submitted:  # not provided — skip verification
         return FieldResult(
             field="government_warning",
             status=FieldStatus.NOT_DETECTED,
+            extracted_value=extracted,
+            submitted_value=None,
+        )
+    if extracted is None:  # warning not found on label — cannot verify claim
+        return FieldResult(
+            field="government_warning",
+            status=FieldStatus.FAIL,
             extracted_value=None,
             submitted_value=submitted,
         )
@@ -42,19 +49,19 @@ def check_fuzzy_field(
     threshold: int,
     partial: bool = False,
 ) -> FieldResult:
-    if extracted is None:
-        return FieldResult(
-            field=field,
-            status=FieldStatus.NOT_DETECTED,
-            extracted_value=None,
-            submitted_value=submitted,
-        )
     if not submitted:  # None or empty string — field not provided, skip verification
         return FieldResult(
             field=field,
             status=FieldStatus.NOT_DETECTED,
             extracted_value=extracted,
             submitted_value=None,
+        )
+    if extracted is None:  # claimed value not found on label — cannot verify
+        return FieldResult(
+            field=field,
+            status=FieldStatus.FAIL,
+            extracted_value=None,
+            submitted_value=submitted,
         )
     fn = fuzz.partial_ratio if partial else fuzz.ratio
     score = fn(extracted.lower().strip(), submitted.lower().strip())
@@ -79,15 +86,22 @@ def _parse_abv(value: str) -> Optional[float]:
 
 
 def check_abv(extracted: Optional[str], submitted: Optional[str]) -> FieldResult:
-    if extracted is None:
+    if not submitted:  # not provided — skip verification
         return FieldResult(
             field="alcohol_content",
             status=FieldStatus.NOT_DETECTED,
+            extracted_value=extracted,
+            submitted_value=None,
+        )
+    if extracted is None:  # not found on label — cannot verify claim
+        return FieldResult(
+            field="alcohol_content",
+            status=FieldStatus.FAIL,
             extracted_value=None,
             submitted_value=submitted,
         )
     ext_val = _parse_abv(extracted)
-    sub_val = _parse_abv(submitted) if submitted else None
+    sub_val = _parse_abv(submitted)
     if ext_val is None or sub_val is None:
         return check_fuzzy_field("alcohol_content", extracted, submitted, threshold=90)
     passes = abs(ext_val - sub_val) <= 0.1
@@ -114,15 +128,22 @@ def _parse_volume_ml(value: str) -> Optional[float]:
 
 
 def check_net_contents(extracted: Optional[str], submitted: Optional[str]) -> FieldResult:
-    if extracted is None:
+    if not submitted:  # not provided — skip verification
         return FieldResult(
             field="net_contents",
             status=FieldStatus.NOT_DETECTED,
+            extracted_value=extracted,
+            submitted_value=None,
+        )
+    if extracted is None:  # not found on label — cannot verify claim
+        return FieldResult(
+            field="net_contents",
+            status=FieldStatus.FAIL,
             extracted_value=None,
             submitted_value=submitted,
         )
     ext_ml = _parse_volume_ml(extracted)
-    sub_ml = _parse_volume_ml(submitted) if submitted else None
+    sub_ml = _parse_volume_ml(submitted)
     if ext_ml is None or sub_ml is None:
         return check_fuzzy_field("net_contents", extracted, submitted, threshold=90)
     passes = abs(ext_ml - sub_ml) <= 1.0
@@ -137,19 +158,19 @@ def check_net_contents(extracted: Optional[str], submitted: Optional[str]) -> Fi
 def check_exact_field(
     field: str, extracted: Optional[str], submitted: Optional[str]
 ) -> FieldResult:
-    if extracted is None:
-        return FieldResult(
-            field=field,
-            status=FieldStatus.NOT_DETECTED,
-            extracted_value=None,
-            submitted_value=submitted,
-        )
     if not submitted:  # None or empty string — field not provided, skip verification
         return FieldResult(
             field=field,
             status=FieldStatus.NOT_DETECTED,
             extracted_value=extracted,
             submitted_value=None,
+        )
+    if extracted is None:  # not found on label — cannot verify claim
+        return FieldResult(
+            field=field,
+            status=FieldStatus.FAIL,
+            extracted_value=None,
+            submitted_value=submitted,
         )
     passes = extracted.strip().lower() == submitted.strip().lower()
     return FieldResult(
@@ -161,19 +182,19 @@ def check_exact_field(
 
 
 def check_sulfites(extracted: Optional[str], submitted: Optional[str]) -> FieldResult:
-    if extracted is None:
-        return FieldResult(
-            field="contains_sulfites",
-            status=FieldStatus.NOT_DETECTED,
-            extracted_value=None,
-            submitted_value=submitted,
-        )
     if not submitted:  # None or empty string — not provided, skip verification
         return FieldResult(
             field="contains_sulfites",
             status=FieldStatus.NOT_DETECTED,
             extracted_value=extracted,
             submitted_value=None,
+        )
+    if extracted is None:  # no sulfite declaration found on label — cannot verify claim
+        return FieldResult(
+            field="contains_sulfites",
+            status=FieldStatus.FAIL,
+            extracted_value=None,
+            submitted_value=submitted,
         )
     if "sulfite" not in submitted.lower():
         return FieldResult(
