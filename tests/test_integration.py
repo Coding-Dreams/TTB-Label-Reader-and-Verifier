@@ -18,7 +18,7 @@ LABELS_DIR = Path(__file__).parent.parent / "testLabels"
 # Values are (expected_substring_or_value, fuzzy_threshold).
 GROUND_TRUTH = {
     "test1.jpg": {
-        "brand_name":           ("ABC", 80),
+        "brand_name":           ("ABC Single Barrel", 80),
         "class_type":           ("Straight Rye Whisky", 80),
         "alcohol_content":      ("45%", 80),
         "net_contents":         ("750", 80),
@@ -48,7 +48,7 @@ GROUND_TRUTH = {
         "government_warning":   ("GOVERNMENT WARNING:", 70),
     },
     "test4.png": {
-        "brand_name":           ("MALT & HOP", 70),
+        "brand_name":           ("Honey Huckleberry Pie", 70),
         "class_type":           ("Ale", 70),
         "alcohol_content":      ("5%", 80),
         "net_contents":         ("PINT", 70),
@@ -69,7 +69,7 @@ _GOV_WARNING = (
 
 PASSING_SUBMISSIONS = {
     "test1.jpg": {
-        "brand_name": "ABC",
+        "brand_name": "ABC Single Barrel",
         "class_type": "Straight Rye Whisky",
         "alcohol_content": "45% ALC/VOL",
         "net_contents": "750 ML",
@@ -99,11 +99,11 @@ PASSING_SUBMISSIONS = {
         "contains_sulfites": "",
     },
     "test4.png": {
-        "brand_name": "MALT & HOP BREWERY",
+        "brand_name": "Honey Huckleberry Pie",
         "class_type": "Ale with Honey and Huckleberry Flavor",
         "alcohol_content": "5% ALC./VOL.",
         "net_contents": "1 PINT, 0.9 FL. OZ.",
-        "producer_name_address": "MALT & HOP BREWERY HYATTSVILLE, MD",
+        "producer_name_address": "MALT & HOP HYATTSVILLE, MD",
         "country_of_origin": "United States",
         "government_warning": _GOV_WARNING,
         "contains_sulfites": "",

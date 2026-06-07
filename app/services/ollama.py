@@ -38,7 +38,7 @@ Required JSON format:
 
 Rules:
 - Return the exact text as it appears on the label
-- brand_name: the product or distillery name as printed
+- brand_name: the consumer-facing product name as printed (e.g. "ABC Single Barrel", "Honey Huckleberry Pie") — this is the specific product or label name consumers use to identify the beverage; do NOT capture the producer, brewery, winery, or distillery company name
 - class_type: the beverage category as printed (e.g. "Straight Rye Whisky", "American Red Wine", "Rum with Coconut Liqueur") — NOT the brewery or winery name
 - alcohol_content: the ABV percentage as printed (e.g. "45% ALC/VOL", "13% BY VOL")
 - net_contents: the volume as printed (e.g. "750 ML", "1 PINT")
@@ -213,18 +213,5 @@ def _postprocess(data: dict) -> dict:
                         break
                 if data.get("contains_sulfites"):
                     break
-
-    # Fallback: derive brand_name from producer_name_address when model returns null
-    # (e.g. "IMPORTED BY: 12345 IMPORTS MIAMI, FL" → "12345 IMPORTS")
-    if not data.get("brand_name") and data.get("producer_name_address"):
-        producer = data["producer_name_address"]
-        stripped = re.sub(
-            r'^\s*(?:BOTTLED|IMPORTED|PRODUCED|DISTRIBUTED|BREWED|PACKED)\s+BY:?\s*',
-            '', producer, flags=re.IGNORECASE,
-        ).strip()
-        # Remove trailing "CITY, ST" or "CITY, COUNTRY" address suffix
-        name_part = re.sub(r',?\s+[\w\s]+,\s+[A-Z]{2}\s*$', '', stripped).strip()
-        if name_part and name_part != stripped and len(name_part) > 2:
-            data["brand_name"] = name_part
 
     return data
