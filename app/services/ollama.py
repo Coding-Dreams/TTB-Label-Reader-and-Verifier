@@ -278,7 +278,7 @@ async def _extract_importer(client: httpx.AsyncClient, image_b64: str) -> Option
     # Only accept if it contains a US address tail — guards against the model
     # returning the foreign producer again or a generic non-address string
     accepted = bool(_US_ADDRESS_TAIL_RE.search(result))
-    logger.debug("_extract_importer raw=%r accepted=%s", result, accepted)
+    logger.warning("_extract_importer raw=%r accepted=%s", result, accepted)
     return result if accepted else None
 
 
