@@ -123,8 +123,13 @@ async def extract_label_fields(
             image_b64 = await loop.run_in_executor(None, _encode_image, effective_path)
             raw = await _call_ollama(client, image_b64, _FULL_PROMPT)
             data = _postprocess(_parse_json(raw))
-            # Back panel often carries sulfite statements and regulatory text
-            sulfite_b64 = back_b64 or image_b64
+            # Back panel often carries sulfite statements and regulatory text.
+            # Encode at higher resolution for the dedicated sulfite scan — small-print
+            # declarations are frequently missed at the default 768px.
+            if back_image_path and back_image_path.exists():
+                sulfite_b64 = await loop.run_in_executor(None, _encode_image, back_image_path, 1024)
+            else:
+                sulfite_b64 = image_b64
             if not data.get("contains_sulfites"):
                 data["contains_sulfites"] = await _extract_sulfites(client, sulfite_b64)
             if not data.get("brand_name"):
@@ -272,7 +277,9 @@ async def _extract_importer(client: httpx.AsyncClient, image_b64: str) -> Option
         return None
     # Only accept if it contains a US address tail — guards against the model
     # returning the foreign producer again or a generic non-address string
-    return result if _US_ADDRESS_TAIL_RE.search(result) else None
+    accepted = bool(_US_ADDRESS_TAIL_RE.search(result))
+    logger.debug("_extract_importer raw=%r accepted=%s", result, accepted)
+    return result if accepted else None
 
 
 async def _extract_net_contents(client: httpx.AsyncClient, image_b64: str) -> Optional[str]:
