@@ -10,6 +10,7 @@ Test label folders live in testLabels/. Each folder contains:
 """
 import contextlib
 import json
+import unicodedata
 import pytest
 import httpx
 from pathlib import Path
@@ -100,12 +101,17 @@ def _verify(
         )
 
 
+def _normalize_text(s: str) -> str:
+    """Lowercase and strip diacritics so accented chars compare equal to their base letters."""
+    return unicodedata.normalize("NFKD", s.lower()).encode("ascii", errors="ignore").decode("ascii")
+
+
 def _field_matches(extracted, expected, threshold: int) -> bool:
     if extracted is None:
         return expected is None or expected == ""
     if expected is None or expected == "":
         return True  # optional — not checked for this label
-    return fuzz.partial_ratio(str(expected).lower(), str(extracted).lower()) >= threshold
+    return fuzz.partial_ratio(_normalize_text(str(expected)), _normalize_text(str(extracted))) >= threshold
 
 
 def _truth_as_form(truth: dict) -> dict:
