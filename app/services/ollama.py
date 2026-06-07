@@ -89,6 +89,8 @@ async def extract_label_fields(image_path: Path) -> LabelFields:
             data["contains_sulfites"] = await _extract_sulfites(client, image_b64)
         if not data.get("brand_name"):
             data["brand_name"] = await _extract_brand_name(client, image_b64)
+        if not data.get("class_type"):
+            data["class_type"] = await _extract_class_type(client, image_b64)
         return LabelFields(**data)
 
 
@@ -99,13 +101,41 @@ async def _extract_brand_name(client: httpx.AsyncClient, image_b64: str) -> Opti
             "model": MODEL,
             "messages": [{"role": "user",
                 "content": (
+                    "Look at this alcohol beverage label image. "
+                    "What is the PRODUCT NAME or LABEL NAME of this specific beverage? "
+                    "Examples: 'ABC Single Barrel', 'Honey Huckleberry Pie', '12345 Imports'. "
+                    "IMPORTANT: if you see text like 'DISTILLED BY XYZ Distillery' or "
+                    "'BREWED & BOTTLED BY XYZ Brewery', that is the PRODUCER name — do NOT "
+                    "return it. Return the product/label name only, or 'none' if you truly "
+                    "cannot identify one."
+                ),
+                "images": [image_b64]}],
+            "stream": False,
+            "keep_alive": -1,
+            "options": {"temperature": 0.1},
+        },
+    )
+    resp.raise_for_status()
+    result = resp.json()["message"]["content"].strip().split("\n")[0].strip()
+    if result.lower() in _NULL_SENTINELS or result.lower() in ("no", "not found", "not present", "cannot determine"):
+        return None
+    return result or None
+
+
+async def _extract_class_type(client: httpx.AsyncClient, image_b64: str) -> Optional[str]:
+    resp = await client.post(
+        f"{OLLAMA_BASE_URL}/api/chat",
+        json={
+            "model": MODEL,
+            "messages": [{"role": "user",
+                "content": (
                     "Look at this alcohol beverage label. "
-                    "What is the consumer-facing brand or product name? "
-                    "This is the specific name on the front label that identifies "
-                    "the product (for example: 'ABC Single Barrel', "
-                    "'Honey Huckleberry Pie', '12345 Imports'). "
-                    "It is NOT the producer, brewery, winery, or distillery company name. "
-                    "Reply with only that name, or 'none' if you cannot determine it."
+                    "What is the regulatory beverage CLASS or TYPE designation? "
+                    "This is the official category description such as "
+                    "'Straight Rye Whisky', 'Ale with Honey and Huckleberry Flavor', "
+                    "'Rum with Coconut Liqueur', 'American Red Wine'. "
+                    "It is NOT the product name or the brewery/winery/distillery name. "
+                    "Reply with only the class/type text, or 'none' if not visible."
                 ),
                 "images": [image_b64]}],
             "stream": False,
@@ -181,6 +211,27 @@ _SINGLE_LINE_FIELDS = {"brand_name", "class_type", "alcohol_content", "net_conte
 _NULL_SENTINELS = {"none", "null", "n/a", "na", "[none]", "unknown", "-"}
 _INVALID_COUNTRIES = {"american", "domestic", "imported", "local"}
 
+# Words that appear in regulatory class/type designations but NOT in product names
+_BEVERAGE_TYPE_WORDS = frozenset({
+    "ale", "beer", "lager", "stout", "porter", "ipa",
+    "whisky", "whiskey", "bourbon", "rye", "scotch",
+    "wine", "champagne", "prosecco", "cider",
+    "rum", "vodka", "gin", "tequila", "mezcal", "brandy",
+    "mead", "liqueur", "spirits", "schnapps", "malt",
+    "saison", "pilsner", "bock", "seltzer",
+})
+
+# Company-type words that identify a producer entity, not a product
+_COMPANY_TYPE_RE = re.compile(
+    r'\b(distillery|brewery|winery|vineyard|estate)\b', re.IGNORECASE
+)
+
+# Phrases that precede the origin country on the label
+_ORIGIN_PREFIX_RE = re.compile(
+    r'^(?:produced?\s+in|product\s+of|made\s+in|imported?\s+from)\s+',
+    re.IGNORECASE,
+)
+
 
 def _postprocess(data: dict) -> dict:
     # Flatten list values — take the first non-empty string element
@@ -211,6 +262,15 @@ def _postprocess(data: dict) -> dict:
         if isinstance(val, str) and val.strip().lower().replace(" ", "_") in _FIELD_NAMES:
             data[key] = None
 
+    # Strip leading origin phrases from country_of_origin to get the bare country name
+    # (e.g. "PRODUCED IN CANADA" → "CANADA", "Product of Germany" → "Germany")
+    country = data.get("country_of_origin")
+    if isinstance(country, str):
+        stripped = _ORIGIN_PREFIX_RE.sub("", country.strip()).strip()
+        if stripped != country.strip():
+            data["country_of_origin"] = stripped
+            country = stripped
+
     # Null out country_of_origin if it's not an actual country name
     country = data.get("country_of_origin")
     if isinstance(country, str):
@@ -222,13 +282,10 @@ def _postprocess(data: dict) -> dict:
             country_lower = country.strip().lower()
             class_type = (data.get("class_type") or "").lower()
             producer = (data.get("producer_name_address") or "").lower()
-            # Reject US inferred from the beverage category name
             if country_lower in ("united states", "america") and (
                 "american" in class_type or "domestic" in class_type
             ):
                 data["country_of_origin"] = None
-            # Reject US when label shows a US-based importer — model is confusing
-            # the importer's domestic address with the product's country of origin
             elif country_lower in ("united states", "america", "usa", "u.s.", "u.s.a.") and (
                 "import" in producer
             ):
@@ -250,5 +307,41 @@ def _postprocess(data: dict) -> dict:
                         break
                 if data.get("contains_sulfites"):
                     break
+
+    # Null out brand_name if it's actually the producer name:
+    # model may grab the "DISTILLED BY XYZ Distillery" line as the brand.
+    # Detect this when brand_name contains company-type words AND is a substring
+    # of producer_name_address (which already has the full producer entry).
+    if data.get("brand_name") and data.get("producer_name_address"):
+        bn_lower = data["brand_name"].strip().lower()
+        prod_lower = data["producer_name_address"].strip().lower()
+        if _COMPANY_TYPE_RE.search(data["brand_name"]) and bn_lower in prod_lower:
+            data["brand_name"] = None
+
+    # If brand_name is null and class_type doesn't contain any standard beverage-type
+    # word, the model likely put the product name in the wrong field — swap them.
+    # (e.g. "Honey Huckleberry Pie" in class_type → move to brand_name)
+    if not data.get("brand_name") and data.get("class_type"):
+        ct_lower = data["class_type"].lower()
+        if not any(word in ct_lower for word in _BEVERAGE_TYPE_WORDS):
+            data["brand_name"] = data["class_type"]
+            data["class_type"] = None
+
+    # Last-resort brand_name fallback for import labels:
+    # when producer_name_address has a "IMPORTED BY: COMPANY CITY, ST" format,
+    # the company name IS the brand (e.g. "12345 IMPORTS").
+    # Only apply when the derived name itself isn't a company-type word.
+    if not data.get("brand_name") and data.get("producer_name_address"):
+        producer = data["producer_name_address"]
+        stripped = re.sub(
+            r'^\s*(?:BOTTLED|IMPORTED|PRODUCED|DISTRIBUTED|BREWED|PACKED)\s+BY:?\s*',
+            '', producer, flags=re.IGNORECASE,
+        ).strip()
+        name_part = re.sub(r',?\s+[\w\s]{2,},\s+[A-Z]{2}\s*$', '', stripped).strip()
+        if (name_part
+                and name_part.lower() != producer.strip().lower()
+                and len(name_part) > 2
+                and not _COMPANY_TYPE_RE.search(name_part)):
+            data["brand_name"] = name_part
 
     return data
