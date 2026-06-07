@@ -146,9 +146,10 @@ async def extract_label_fields(
             # comparator returns FAIL rather than passing with a wrong foreign address.
             importer_b64 = back_b64 or image_b64
             producer = data.get("producer_name_address")
-            if isinstance(producer, str) and not _US_ADDRESS_TAIL_RE.search(producer):
+            if isinstance(producer, str) and not _is_us_address(producer):
                 importer = await _extract_importer(client, importer_b64)
-                data["producer_name_address"] = importer
+                if importer:
+                    data["producer_name_address"] = importer
             return LabelFields(**data)
     finally:
         if stitched:
@@ -395,6 +396,24 @@ _US_ADDRESS_TAIL_RE = re.compile(
     r')(?:\s+\d{5}(?:-\d{4})?)?\s*$',
     re.IGNORECASE
 )
+
+# Strips a trailing country/country-code suffix before address matching
+_TRAILING_USA_RE = re.compile(r',?\s*U\.?S\.?A?\.?\s*$', re.IGNORECASE)
+# Normalizes dotted state abbreviations like N.Y. or D.C. to NY / DC
+_DOTTED_ABBREV_RE = re.compile(r'\b([A-Z])\.([A-Z])\.?\s*$')
+
+
+def _is_us_address(addr: str) -> bool:
+    """Return True if addr ends with a recognisable US location."""
+    if _US_ADDRESS_TAIL_RE.search(addr):
+        return True
+    # Handle dotted abbreviations: N.Y. → NY, D.C. → DC
+    norm = _DOTTED_ABBREV_RE.sub(r'\1\2', addr.strip())
+    if _US_ADDRESS_TAIL_RE.search(norm):
+        return True
+    # Handle trailing country suffix: "Tennessee, USA" → "Tennessee"
+    stripped = _TRAILING_USA_RE.sub('', addr.strip())
+    return bool(_US_ADDRESS_TAIL_RE.search(stripped))
 
 
 def _normalize_class_type(value: str) -> Optional[str]:
