@@ -1,6 +1,7 @@
 import shutil
 import uuid
 from pathlib import Path
+from typing import Optional
 
 import httpx
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
@@ -16,13 +17,24 @@ _UPLOAD_DIR = Path("data/uploads")
 _UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _save_upload(upload: UploadFile, prefix: str) -> Path:
+    dest = _UPLOAD_DIR / f"{prefix}_{uuid.uuid4()}_{upload.filename}"
+    with open(dest, "wb") as f:
+        shutil.copyfileobj(upload.file, f)
+    return dest
+
+
 @router.post("/extract")
-async def extract(image: UploadFile = File(...)):
-    tmp = _UPLOAD_DIR / f"tmp_{uuid.uuid4()}_{image.filename}"
+async def extract(
+    image: UploadFile = File(...),
+    back_image: Optional[UploadFile] = File(default=None),
+):
+    tmp = _save_upload(image, "tmp")
+    tmp_back: Optional[Path] = None
     try:
-        with open(tmp, "wb") as f:
-            shutil.copyfileobj(image.file, f)
-        fields = await extract_label_fields(tmp)
+        if back_image and back_image.filename:
+            tmp_back = _save_upload(back_image, "tmp_back")
+        fields = await extract_label_fields(tmp, tmp_back)
         return fields.model_dump()
     except httpx.TimeoutException:
         raise HTTPException(status_code=504, detail="Model took too long — try again")
@@ -32,11 +44,14 @@ async def extract(image: UploadFile = File(...)):
         raise HTTPException(status_code=422, detail=f"Extraction failed: {str(e)}")
     finally:
         tmp.unlink(missing_ok=True)
+        if tmp_back:
+            tmp_back.unlink(missing_ok=True)
 
 
 @router.post("/verify")
 async def verify(
     image: UploadFile = File(...),
+    back_image: Optional[UploadFile] = File(default=None),
     brand_name: str = Form(default=""),
     class_type: str = Form(default=""),
     alcohol_content: str = Form(default=""),
@@ -46,12 +61,13 @@ async def verify(
     government_warning: str = Form(default=""),
     contains_sulfites: str = Form(default=""),
 ):
-    tmp = _UPLOAD_DIR / f"tmp_{uuid.uuid4()}_{image.filename}"
+    tmp = _save_upload(image, "tmp")
+    tmp_back: Optional[Path] = None
     try:
-        with open(tmp, "wb") as f:
-            shutil.copyfileobj(image.file, f)
+        if back_image and back_image.filename:
+            tmp_back = _save_upload(back_image, "tmp_back")
 
-        extracted = await extract_label_fields(tmp)
+        extracted = await extract_label_fields(tmp, tmp_back)
         form_data = LabelFields(
             brand_name=brand_name or None,
             class_type=class_type or None,
@@ -77,3 +93,5 @@ async def verify(
         raise HTTPException(status_code=503, detail="Verification service unavailable — is Ollama running?")
     finally:
         tmp.unlink(missing_ok=True)
+        if tmp_back:
+            tmp_back.unlink(missing_ok=True)

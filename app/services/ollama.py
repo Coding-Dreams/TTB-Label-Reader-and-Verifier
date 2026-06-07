@@ -5,6 +5,7 @@ import os
 import re
 import base64
 import json
+import tempfile
 import unicodedata
 from typing import Optional
 import httpx
@@ -27,7 +28,7 @@ Return ONLY valid JSON with no additional text. Set any field to null if not vis
 Required JSON format:
 {
   "brand_name": "string or null",
-  "class_type": "string or null",
+  "class_type": "Wine" or "Malt Beverage" or "Distilled Spirits" or null,
   "alcohol_content": "string or null",
   "net_contents": "string or null",
   "contains_sulfites": "string or null",
@@ -37,9 +38,9 @@ Required JSON format:
 }
 
 Rules:
-- Return the exact text as it appears on the label
+- Return the exact text as it appears on the label for all fields except class_type
 - brand_name: the label/product name printed on the front that identifies this specific product (e.g. "ABC Single Barrel", "Honey Huckleberry Pie", "12345 Imports") — often the most prominent or stylistic name; do NOT capture the producer, brewery, winery, or distillery company name
-- class_type: the regulatory beverage category as printed (e.g. "Straight Rye Whisky", "American Red Wine", "Ale with Honey and Huckleberry Flavor", "Rum with Coconut Liqueur") — the standardized type designation; NOT the brewery or winery name
+- class_type: EXACTLY one of three values — "Wine", "Malt Beverage", or "Distilled Spirits" — based on what category of alcohol this is. Wine = grape/fruit wines, champagne, prosecco, cider. Malt Beverage = beer, ale, lager, stout, porter, IPA, hard seltzer. Distilled Spirits = whiskey, bourbon, rum, vodka, gin, tequila, brandy, liqueur, and similar spirits
 - alcohol_content: the ABV percentage as printed (e.g. "45% ALC/VOL", "13% BY VOL")
 - net_contents: the volume as printed (e.g. "750 ML", "1 PINT")
 - contains_sulfites: search ALL panels for any sulfite statement (e.g. "CONTAINS SULFITES", "Contains Sulfating Agents"); return the exact text if found, null if absent
@@ -61,6 +62,28 @@ def _encode_image(image_path: Path) -> str:
         return base64.b64encode(buf.getvalue()).decode()
 
 
+def _stitch_images(front_path: Path, back_path: Path) -> Path:
+    """Stitch front (left) and back (right) label images side by side at matching height."""
+    with Image.open(front_path) as front_img, Image.open(back_path) as back_img:
+        front_rgb = front_img.convert("RGB")
+        back_rgb = back_img.convert("RGB")
+
+        target_h = max(front_rgb.height, back_rgb.height)
+        fw = int(front_rgb.width * target_h / front_rgb.height)
+        bw = int(back_rgb.width * target_h / back_rgb.height)
+        front_r = front_rgb.resize((fw, target_h), Image.LANCZOS)
+        back_r = back_rgb.resize((bw, target_h), Image.LANCZOS)
+
+        combined = Image.new("RGB", (fw + bw, target_h), (255, 255, 255))
+        combined.paste(front_r, (0, 0))
+        combined.paste(back_r, (fw, 0))
+
+        fd, tmp = tempfile.mkstemp(suffix=".jpg", prefix="stitched_")
+        os.close(fd)
+        combined.save(tmp, format="JPEG", quality=95)
+        return Path(tmp)
+
+
 async def _warmup_model() -> None:
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
@@ -79,19 +102,35 @@ async def _warmup_model() -> None:
         logger.warning(f"Model warmup failed (will load on first request): {e}")
 
 
-async def extract_label_fields(image_path: Path) -> LabelFields:
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        loop = asyncio.get_event_loop()
-        image_b64 = await loop.run_in_executor(None, _encode_image, image_path)
-        raw = await _call_ollama(client, image_b64, _FULL_PROMPT)
-        data = _postprocess(_parse_json(raw))
-        if not data.get("contains_sulfites"):
-            data["contains_sulfites"] = await _extract_sulfites(client, image_b64)
-        if not data.get("brand_name"):
-            data["brand_name"] = await _extract_brand_name(client, image_b64)
-        if not data.get("class_type"):
-            data["class_type"] = await _extract_class_type(client, image_b64)
-        return LabelFields(**data)
+async def extract_label_fields(
+    image_path: Path, back_image_path: Optional[Path] = None
+) -> LabelFields:
+    stitched: Optional[Path] = None
+    try:
+        if back_image_path and back_image_path.exists():
+            loop = asyncio.get_event_loop()
+            stitched = await loop.run_in_executor(
+                None, _stitch_images, image_path, back_image_path
+            )
+            effective_path = stitched
+        else:
+            effective_path = image_path
+
+        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+            loop = asyncio.get_event_loop()
+            image_b64 = await loop.run_in_executor(None, _encode_image, effective_path)
+            raw = await _call_ollama(client, image_b64, _FULL_PROMPT)
+            data = _postprocess(_parse_json(raw))
+            if not data.get("contains_sulfites"):
+                data["contains_sulfites"] = await _extract_sulfites(client, image_b64)
+            if not data.get("brand_name"):
+                data["brand_name"] = await _extract_brand_name(client, image_b64)
+            if not data.get("class_type"):
+                data["class_type"] = await _extract_class_type(client, image_b64)
+            return LabelFields(**data)
+    finally:
+        if stitched:
+            stitched.unlink(missing_ok=True)
 
 
 async def _extract_brand_name(client: httpx.AsyncClient, image_b64: str) -> Optional[str]:
@@ -130,12 +169,12 @@ async def _extract_class_type(client: httpx.AsyncClient, image_b64: str) -> Opti
             "messages": [{"role": "user",
                 "content": (
                     "Look at this alcohol beverage label. "
-                    "What is the regulatory beverage CLASS or TYPE designation? "
-                    "This is the official category description such as "
-                    "'Straight Rye Whisky', 'Ale with Honey and Huckleberry Flavor', "
-                    "'Rum with Coconut Liqueur', 'American Red Wine'. "
-                    "It is NOT the product name or the brewery/winery/distillery name. "
-                    "Reply with only the class/type text, or 'none' if not visible."
+                    "Classify this product as EXACTLY one of three categories: "
+                    "'Wine', 'Malt Beverage', or 'Distilled Spirits'. "
+                    "Wine = grape or fruit wine, champagne, prosecco, cider, mead. "
+                    "Malt Beverage = beer, ale, lager, stout, porter, IPA, hard seltzer, or any malt-based drink. "
+                    "Distilled Spirits = whiskey, bourbon, rye, rum, vodka, gin, tequila, brandy, cognac, liqueur, or any distilled spirit. "
+                    "Reply with ONLY the category name, nothing else."
                 ),
                 "images": [image_b64]}],
             "stream": False,
@@ -145,9 +184,9 @@ async def _extract_class_type(client: httpx.AsyncClient, image_b64: str) -> Opti
     )
     resp.raise_for_status()
     result = resp.json()["message"]["content"].strip().split("\n")[0].strip()
-    if result.lower() in _NULL_SENTINELS or result.lower() in ("no", "not found", "not present", "cannot determine"):
+    if result.lower() in _NULL_SENTINELS:
         return None
-    return result or None
+    return _normalize_class_type(result) or result or None
 
 
 async def _extract_sulfites(client: httpx.AsyncClient, image_b64: str) -> Optional[str]:
@@ -211,7 +250,7 @@ _SINGLE_LINE_FIELDS = {"brand_name", "class_type", "alcohol_content", "net_conte
 _NULL_SENTINELS = {"none", "null", "n/a", "na", "[none]", "unknown", "-"}
 _INVALID_COUNTRIES = {"american", "domestic", "imported", "local"}
 
-# Words that appear in regulatory class/type designations but NOT in product names
+# Words that appear in beverage types — used to detect if class_type is actually a product name
 _BEVERAGE_TYPE_WORDS = frozenset({
     "ale", "beer", "lager", "stout", "porter", "ipa",
     "whisky", "whiskey", "bourbon", "rye", "scotch",
@@ -220,6 +259,23 @@ _BEVERAGE_TYPE_WORDS = frozenset({
     "mead", "liqueur", "spirits", "schnapps", "malt",
     "saison", "pilsner", "bock", "seltzer",
 })
+
+# Keyword → canonical class_type category mapping
+_CLASS_TYPE_KEYWORDS = [
+    ("wine", "Wine"), ("champagne", "Wine"), ("prosecco", "Wine"),
+    ("mead", "Wine"), ("cider", "Wine"), ("vermouth", "Wine"),
+    ("ale", "Malt Beverage"), ("beer", "Malt Beverage"), ("lager", "Malt Beverage"),
+    ("stout", "Malt Beverage"), ("porter", "Malt Beverage"), ("ipa", "Malt Beverage"),
+    ("malt", "Malt Beverage"), ("saison", "Malt Beverage"), ("pilsner", "Malt Beverage"),
+    ("bock", "Malt Beverage"), ("seltzer", "Malt Beverage"),
+    ("whisky", "Distilled Spirits"), ("whiskey", "Distilled Spirits"),
+    ("bourbon", "Distilled Spirits"), ("scotch", "Distilled Spirits"),
+    ("rum", "Distilled Spirits"), ("vodka", "Distilled Spirits"),
+    ("gin", "Distilled Spirits"), ("tequila", "Distilled Spirits"),
+    ("mezcal", "Distilled Spirits"), ("brandy", "Distilled Spirits"),
+    ("cognac", "Distilled Spirits"), ("liqueur", "Distilled Spirits"),
+    ("schnapps", "Distilled Spirits"), ("spirit", "Distilled Spirits"),
+]
 
 # Company-type words that identify a producer entity, not a product
 _COMPANY_TYPE_RE = re.compile(
@@ -231,6 +287,21 @@ _ORIGIN_PREFIX_RE = re.compile(
     r'^(?:produced?\s+in|product\s+of|made\s+in|imported?\s+from)\s+',
     re.IGNORECASE,
 )
+
+
+def _normalize_class_type(value: str) -> Optional[str]:
+    """Map any class_type string to one of the three canonical categories, or None if unrecognizable."""
+    v = value.strip().lower()
+    if v in ("wine",):
+        return "Wine"
+    if v in ("malt beverage", "malt beverages"):
+        return "Malt Beverage"
+    if v in ("distilled spirits", "distilled spirit"):
+        return "Distilled Spirits"
+    for keyword, category in _CLASS_TYPE_KEYWORDS:
+        if keyword in v:
+            return category
+    return None
 
 
 def _postprocess(data: dict) -> dict:
@@ -263,7 +334,6 @@ def _postprocess(data: dict) -> dict:
             data[key] = None
 
     # Strip leading origin phrases from country_of_origin to get the bare country name
-    # (e.g. "PRODUCED IN CANADA" → "CANADA", "Product of Germany" → "Germany")
     country = data.get("country_of_origin")
     if isinstance(country, str):
         stripped = _ORIGIN_PREFIX_RE.sub("", country.strip()).strip()
@@ -296,8 +366,7 @@ def _postprocess(data: dict) -> dict:
     if gw and not gw.upper().lstrip().startswith("GOVERNMENT WARNING"):
         data["government_warning"] = "GOVERNMENT WARNING: " + gw.strip()
 
-    # Fallback: if model didn't populate contains_sulfites, scan other fields for
-    # sulfite mentions (model may misattribute the statement to a nearby field)
+    # Fallback: scan other fields for sulfite mentions the model may have misattributed
     if not data.get("contains_sulfites"):
         for val in data.values():
             if isinstance(val, str) and "sulfite" in val.lower():
@@ -308,10 +377,7 @@ def _postprocess(data: dict) -> dict:
                 if data.get("contains_sulfites"):
                     break
 
-    # Null out brand_name if it's actually the producer name:
-    # model may grab the "DISTILLED BY XYZ Distillery" line as the brand.
-    # Detect this when brand_name contains company-type words AND is a substring
-    # of producer_name_address (which already has the full producer entry).
+    # Null out brand_name if it's actually the producer name
     if data.get("brand_name") and data.get("producer_name_address"):
         bn_lower = data["brand_name"].strip().lower()
         prod_lower = data["producer_name_address"].strip().lower()
@@ -320,17 +386,19 @@ def _postprocess(data: dict) -> dict:
 
     # If brand_name is null and class_type doesn't contain any standard beverage-type
     # word, the model likely put the product name in the wrong field — swap them.
-    # (e.g. "Honey Huckleberry Pie" in class_type → move to brand_name)
     if not data.get("brand_name") and data.get("class_type"):
         ct_lower = data["class_type"].lower()
         if not any(word in ct_lower for word in _BEVERAGE_TYPE_WORDS):
             data["brand_name"] = data["class_type"]
             data["class_type"] = None
 
-    # Last-resort brand_name fallback for import labels:
-    # when producer_name_address has a "IMPORTED BY: COMPANY CITY, ST" format,
-    # the company name IS the brand (e.g. "12345 IMPORTS").
-    # Only apply when the derived name itself isn't a company-type word.
+    # Normalize class_type to one of three canonical categories; clear if unrecognizable
+    ct = data.get("class_type")
+    if isinstance(ct, str):
+        normalized = _normalize_class_type(ct)
+        data["class_type"] = normalized  # None if unrecognizable → triggers fallback call
+
+    # Last-resort brand_name fallback for import labels
     if not data.get("brand_name") and data.get("producer_name_address"):
         producer = data["producer_name_address"]
         stripped = re.sub(

@@ -3,111 +3,34 @@ Integration tests — require the API and Ollama containers to be running.
 
 Run all tests:       pytest tests/test_integration.py -v
 Run unit tests only: pytest tests/ -v -m "not integration"
+
+Test label folders live in testLabels/. Each folder contains:
+  - One image (single label) OR two images named *Front* and *Back*
+  - A JSON truth file with expected field values (null = field not present/required)
 """
+import contextlib
+import json
 import pytest
 import httpx
 from pathlib import Path
 from thefuzz import fuzz
+from typing import Optional
 
 pytestmark = pytest.mark.integration
 
 API_BASE = "http://localhost:8000"
 LABELS_DIR = Path(__file__).parent.parent / "testLabels"
 
-# Ground truth for each test label — used to assert extract quality and verify pass.
-# Values are (expected_substring_or_value, fuzzy_threshold).
-GROUND_TRUTH = {
-    "test1.jpg": {
-        "brand_name":           ("ABC Single Barrel", 80),
-        "class_type":           ("Straight Rye Whisky", 80),
-        "alcohol_content":      ("45%", 80),
-        "net_contents":         ("750", 80),
-        "producer_name_address":("ABC Distillery Frederick, MD", 70),
-        "country_of_origin":    ("", 90),       # not required for domestic spirits
-        "contains_sulfites":    ("", 70),        # whisky — no sulfite declaration
-        "government_warning":   ("GOVERNMENT WARNING:", 70),
-    },
-    "test2.png": {
-        "brand_name":           ("ABC WINERY", 80),
-        "class_type":           ("Red Wine", 70),
-        "alcohol_content":      ("13%", 80),
-        "net_contents":         ("750", 80),
-        "producer_name_address":("XYZ Cellars, CITY, STATE", 70),
-        "country_of_origin":    ("", 90),       # not required for domestic wine
-        "contains_sulfites":    ("CONTAINS SULFITES", 70),
-        "government_warning":   ("GOVERNMENT WARNING:", 70),
-    },
-    "test3.jpg": {
-        "brand_name":           ("12345 Imports", 80),
-        "class_type":           ("Rum", 70),
-        "alcohol_content":      ("18%", 80),
-        "net_contents":         ("200", 80),
-        "producer_name_address":("12345 IMPORTS, MIAMI, FL", 70),
-        "country_of_origin":    ("Canada", 90),
-        "contains_sulfites":    ("", 70),        # rum — no sulfite declaration
-        "government_warning":   ("GOVERNMENT WARNING:", 70),
-    },
-    "test4.png": {
-        "brand_name":           ("Honey Huckleberry Pie", 70),
-        "class_type":           ("Ale", 70),
-        "alcohol_content":      ("5%", 80),
-        "net_contents":         ("PINT", 70),
-        "producer_name_address":("MALT & HOP, HYATTSVILLE, MD", 70),
-        "country_of_origin":    ("", 90),       # not required for domestic beer
-        "contains_sulfites":    ("", 70),        # ale — no sulfite declaration
-        "government_warning":   ("GOVERNMENT WARNING:", 70),
-    },
-}
-
-# Submitted form data for each label — should produce overall_pass=True.
-_GOV_WARNING = (
-    "GOVERNMENT WARNING: (1) According to the Surgeon General, women should not drink "
-    "alcoholic beverages during pregnancy because of the risk of birth defects. "
-    "(2) Consumption of alcoholic beverages impairs your ability to drive a car or "
-    "operate machinery, and may cause health problems."
-)
-
-PASSING_SUBMISSIONS = {
-    "test1.jpg": {
-        "brand_name": "ABC Single Barrel",
-        "class_type": "Straight Rye Whisky",
-        "alcohol_content": "45% ALC/VOL",
-        "net_contents": "750 ML",
-        "producer_name_address": "ABC Distillery, Frederick, MD",
-        "country_of_origin": "United States",
-        "government_warning": _GOV_WARNING,
-        "contains_sulfites": "",
-    },
-    "test2.png": {
-        "brand_name": "ABC WINERY",
-        "class_type": "American Red Wine",
-        "alcohol_content": "13% BY VOL",
-        "net_contents": "750 ML",
-        "producer_name_address": "XYZ Cellars, City, State",
-        "country_of_origin": "",
-        "government_warning": _GOV_WARNING,
-        "contains_sulfites": "CONTAINS SULFITES",
-    },
-    "test3.jpg": {
-        "brand_name": "12345 IMPORTS",
-        "class_type": "Rum with Coconut Liqueur",
-        "alcohol_content": "18% ALC/VOL",
-        "net_contents": "200 ML",
-        "producer_name_address": "12345 IMPORTS MIAMI, FL",
-        "country_of_origin": "Canada",
-        "government_warning": _GOV_WARNING,
-        "contains_sulfites": "",
-    },
-    "test4.png": {
-        "brand_name": "Honey Huckleberry Pie",
-        "class_type": "Ale with Honey and Huckleberry Flavor",
-        "alcohol_content": "5% ALC./VOL.",
-        "net_contents": "1 PINT, 0.9 FL. OZ.",
-        "producer_name_address": "MALT & HOP HYATTSVILLE, MD",
-        "country_of_origin": "United States",
-        "government_warning": _GOV_WARNING,
-        "contains_sulfites": "",
-    },
+# Per-field thresholds for extraction quality tests
+_FIELD_THRESHOLDS = {
+    "brand_name": 80,
+    "class_type": 85,
+    "alcohol_content": 90,
+    "net_contents": 80,
+    "producer_name_address": 70,
+    "country_of_origin": 90,
+    "contains_sulfites": 70,
+    "government_warning": 70,
 }
 
 
@@ -121,91 +44,156 @@ def api():
         pytest.skip("API not reachable — start Docker containers before running integration tests")
 
 
-def _field_matches(extracted: str | None, expected: str, threshold: int) -> bool:
-    if extracted is None:
-        return False
-    return fuzz.partial_ratio(expected.lower(), extracted.lower()) >= threshold
-
-
 # ---------------------------------------------------------------------------
-# Extract endpoint tests
+# Helpers
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("filename,truth", GROUND_TRUTH.items())
-def test_extract_fields(api, filename, truth):
-    image_path = LABELS_DIR / filename
-    if not image_path.exists():
-        pytest.skip(f"Test image not found: {image_path}")
+def _get_label_images(folder: Path):
+    """Return (front_path, back_path_or_None) for a label folder.
 
-    with open(image_path, "rb") as f:
-        resp = httpx.post(
-            f"{API_BASE}/extract",
-            files={"image": (filename, f)},
-            timeout=60,
+    Detects front/back by looking for 'front'/'back' in filename (case-insensitive).
+    Falls back to the single image in the folder if no front/back naming is found.
+    """
+    images = sorted(
+        f for f in folder.iterdir()
+        if f.suffix.lower() in (".jpg", ".jpeg", ".png")
+    )
+    front = next((f for f in images if "front" in f.name.lower()), None)
+    back = next((f for f in images if "back" in f.name.lower()), None)
+    if front:
+        return front, back
+    return (images[0] if images else None), None
+
+
+def _load_truth(folder: Path) -> dict:
+    json_files = list(folder.glob("*.json"))
+    if not json_files:
+        return {}
+    with open(json_files[0]) as f:
+        return json.load(f)
+
+
+def _extract(front: Path, back: Optional[Path] = None, timeout: int = 60) -> httpx.Response:
+    with contextlib.ExitStack() as stack:
+        fh = stack.enter_context(open(front, "rb"))
+        files = [("image", (front.name, fh))]
+        if back:
+            bh = stack.enter_context(open(back, "rb"))
+            files.append(("back_image", (back.name, bh)))
+        return httpx.post(f"{API_BASE}/extract", files=files, timeout=timeout)
+
+
+def _verify(
+    front: Path,
+    back: Optional[Path] = None,
+    form_data: Optional[dict] = None,
+    timeout: int = 60,
+) -> httpx.Response:
+    with contextlib.ExitStack() as stack:
+        fh = stack.enter_context(open(front, "rb"))
+        files = [("image", (front.name, fh))]
+        if back:
+            bh = stack.enter_context(open(back, "rb"))
+            files.append(("back_image", (back.name, bh)))
+        return httpx.post(
+            f"{API_BASE}/verify", files=files, data=form_data or {}, timeout=timeout
         )
 
+
+def _field_matches(extracted, expected, threshold: int) -> bool:
+    if extracted is None:
+        return expected is None or expected == ""
+    if expected is None or expected == "":
+        return True  # optional — not checked for this label
+    return fuzz.partial_ratio(str(expected).lower(), str(extracted).lower()) >= threshold
+
+
+def _truth_as_form(truth: dict) -> dict:
+    """Convert a truth dict to form-data values (None → empty string)."""
+    return {k: (v if v is not None else "") for k, v in truth.items()}
+
+
+# ---------------------------------------------------------------------------
+# Discover label folders once for parametrize
+# ---------------------------------------------------------------------------
+
+_LABEL_FOLDERS = (
+    sorted(d for d in LABELS_DIR.iterdir() if d.is_dir())
+    if LABELS_DIR.exists()
+    else []
+)
+
+
+# ---------------------------------------------------------------------------
+# Extract endpoint — verify extraction quality against ground truth
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("folder", _LABEL_FOLDERS, ids=[f.name for f in _LABEL_FOLDERS])
+def test_extract_fields(api, folder):
+    front, back = _get_label_images(folder)
+    if not front:
+        pytest.skip(f"No image found in {folder.name}")
+
+    truth = _load_truth(folder)
+    if not truth:
+        pytest.skip(f"No truth JSON in {folder.name}")
+
+    resp = _extract(front, back)
     assert resp.status_code == 200, f"Extract failed: {resp.text}"
     data = resp.json()
 
-    for field, (expected, threshold) in truth.items():
-        if not expected:  # empty string means field is not required / not checked for this label
-            continue
+    failures = []
+    for field, threshold in _FIELD_THRESHOLDS.items():
+        expected = truth.get(field)
+        if expected is None or expected == "":
+            continue  # not required for this label
         extracted = data.get(field)
-        assert _field_matches(extracted, expected, threshold), (
-            f"{filename} — {field}: expected ~'{expected}' (threshold {threshold}%), "
-            f"got '{extracted}'"
-        )
+        if not _field_matches(extracted, expected, threshold):
+            failures.append(
+                f"  {field}: expected ~'{expected}' (threshold {threshold}%), got '{extracted}'"
+            )
+
+    assert not failures, f"\n{folder.name} extraction failures:\n" + "\n".join(failures)
 
 
 # ---------------------------------------------------------------------------
-# Verify endpoint tests — passing submissions
+# Verify endpoint — passing submissions (truth data should produce overall_pass=True)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("filename,submission", PASSING_SUBMISSIONS.items())
-def test_verify_passes_with_correct_data(api, filename, submission):
-    image_path = LABELS_DIR / filename
-    if not image_path.exists():
-        pytest.skip(f"Test image not found: {image_path}")
+@pytest.mark.parametrize("folder", _LABEL_FOLDERS, ids=[f.name for f in _LABEL_FOLDERS])
+def test_verify_passes_with_truth_data(api, folder):
+    front, back = _get_label_images(folder)
+    if not front:
+        pytest.skip(f"No image found in {folder.name}")
 
-    with open(image_path, "rb") as f:
-        resp = httpx.post(
-            f"{API_BASE}/verify",
-            files={"image": (filename, f)},
-            data=submission,
-            timeout=60,
-        )
+    truth = _load_truth(folder)
+    if not truth:
+        pytest.skip(f"No truth JSON in {folder.name}")
 
+    resp = _verify(front, back, form_data=_truth_as_form(truth))
     assert resp.status_code == 200, f"Verify failed: {resp.text}"
     result = resp.json()
 
-    failing = [
-        f["field"] for f in result["fields"] if f["status"] == "fail"
-    ]
+    failing = [f["field"] for f in result["fields"] if f["status"] == "fail"]
     assert result["overall_pass"], (
-        f"{filename} — expected overall pass but got failures: {failing}"
+        f"{folder.name} — expected overall pass but got failures: {failing}"
     )
 
 
 # ---------------------------------------------------------------------------
-# Verify endpoint test — deliberate mismatch should fail
+# Verify endpoint — deliberate mismatches should fail
 # ---------------------------------------------------------------------------
 
 def test_verify_fails_with_wrong_brand(api):
-    image_path = LABELS_DIR / "test1.jpg"
-    if not image_path.exists():
-        pytest.skip("test1.jpg not found")
+    folder = LABELS_DIR / "TEST1"
+    front, back = _get_label_images(folder)
+    if not front:
+        pytest.skip("TEST1 not found")
 
-    with open(image_path, "rb") as f:
-        resp = httpx.post(
-            f"{API_BASE}/verify",
-            files={"image": ("test1.jpg", f)},
-            data={
-                **PASSING_SUBMISSIONS["test1.jpg"],
-                "brand_name": "COMPLETELY WRONG DISTILLERY XYZ",
-            },
-            timeout=60,
-        )
+    truth = _load_truth(folder)
+    form_data = {**_truth_as_form(truth), "brand_name": "COMPLETELY WRONG DISTILLERY XYZ"}
 
+    resp = _verify(front, back, form_data=form_data)
     assert resp.status_code == 200
     result = resp.json()
     brand_result = next(r for r in result["fields"] if r["field"] == "brand_name")
@@ -215,21 +203,15 @@ def test_verify_fails_with_wrong_brand(api):
 
 
 def test_verify_fails_with_wrong_abv(api):
-    image_path = LABELS_DIR / "test1.jpg"
-    if not image_path.exists():
-        pytest.skip("test1.jpg not found")
+    folder = LABELS_DIR / "TEST1"
+    front, back = _get_label_images(folder)
+    if not front:
+        pytest.skip("TEST1 not found")
 
-    with open(image_path, "rb") as f:
-        resp = httpx.post(
-            f"{API_BASE}/verify",
-            files={"image": ("test1.jpg", f)},
-            data={
-                **PASSING_SUBMISSIONS["test1.jpg"],
-                "alcohol_content": "12% ALC/VOL",
-            },
-            timeout=60,
-        )
+    truth = _load_truth(folder)
+    form_data = {**_truth_as_form(truth), "alcohol_content": "12% ALC/VOL"}
 
+    resp = _verify(front, back, form_data=form_data)
     assert resp.status_code == 200
     result = resp.json()
     abv_result = next(r for r in result["fields"] if r["field"] == "alcohol_content")
@@ -239,7 +221,7 @@ def test_verify_fails_with_wrong_abv(api):
 
 
 # ---------------------------------------------------------------------------
-# History endpoint test
+# History endpoint
 # ---------------------------------------------------------------------------
 
 def test_history_records_verification(api):
@@ -247,5 +229,4 @@ def test_history_records_verification(api):
     assert resp.status_code == 200
     records = resp.json()
     assert isinstance(records, list)
-    # After running the verify tests above, there should be records
     assert len(records) > 0, "Expected at least one history record after running verify tests"
