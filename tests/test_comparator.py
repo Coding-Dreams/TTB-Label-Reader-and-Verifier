@@ -167,6 +167,26 @@ def test_sulfites_not_detected_when_neither_declares():
     assert result.status == FieldStatus.NOT_DETECTED
 
 
+def test_sulfites_passes_when_both_declare_free():
+    result = check_sulfites("SULFITE FREE", "SULFITE FREE")
+    assert result.status == FieldStatus.PASS
+
+
+def test_sulfites_fails_when_positive_vs_negative_mismatch():
+    result = check_sulfites("CONTAINS SULFITES", "SULFITE FREE")
+    assert result.status == FieldStatus.FAIL
+
+
+def test_sulfites_fails_when_negative_vs_positive_mismatch():
+    result = check_sulfites("SULFITE FREE", "CONTAINS SULFITES")
+    assert result.status == FieldStatus.FAIL
+
+
+def test_sulfites_fails_when_label_is_free_but_submission_omits():
+    result = check_sulfites("SULFITE FREE", None)
+    assert result.status == FieldStatus.FAIL
+
+
 def test_compare_label_all_pass():
     warning = "GOVERNMENT WARNING: According to the Surgeon General, women should not drink alcoholic beverages during pregnancy because of the risk of birth defects."
     extracted = LabelFields(

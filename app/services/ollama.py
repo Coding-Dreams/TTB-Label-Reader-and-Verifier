@@ -43,7 +43,7 @@ Rules:
 - class_type: EXACTLY one of three values — "Wine", "Malt Beverage", or "Distilled Spirits" — based on what category of alcohol this is. Wine = grape/fruit wines, champagne, prosecco, cider. Malt Beverage = beer, ale, lager, stout, porter, IPA, hard seltzer. Distilled Spirits = whiskey, bourbon, rum, vodka, gin, tequila, brandy, liqueur, and similar spirits
 - alcohol_content: the ABV percentage as printed (e.g. "45% ALC/VOL", "13% BY VOL")
 - net_contents: the volume as printed (e.g. "750 ML", "1 PINT")
-- contains_sulfites: search ALL panels for any sulfite statement (e.g. "CONTAINS SULFITES", "Contains Sulfating Agents"); return the exact text if found, null if absent
+- contains_sulfites: search ALL panels for any sulfite statement — this includes BOTH positive declarations (e.g. "CONTAINS SULFITES", "Contains Sulfating Agents") AND negative declarations (e.g. "SULFITE FREE", "NO SULFITES ADDED", "Contains No Detectable Sulfites"); return the exact text if found, null if absent
 - producer_name_address: the COMPLETE producer/bottler/importer entry as printed — capture BOTH the company name AND the full location (city, state/country) as one value (e.g. "ABC DISTILLERY FREDERICK, MD", "IMPORTED BY: 12345 IMPORTS MIAMI, FL"); do NOT return just the name or just the address alone; if BOTH a foreign producer AND a US importer/bottler/distributor are listed, return the IMPORTER/BOTTLER/DISTRIBUTOR entry — NOT the foreign producer
 - country_of_origin: the country name, but ONLY if explicitly stated as the product's origin (e.g. "Product of Canada", "Made in Germany", "Imported from France"). Do NOT infer from the beverage category or style name — "American Red Wine" does NOT mean country_of_origin is "United States"
 - government_warning: the COMPLETE warning text EXACTLY as printed, including the "GOVERNMENT WARNING:" heading if present"""
@@ -133,6 +133,10 @@ async def extract_label_fields(
                 importer = await _extract_importer(client, image_b64)
                 if importer:
                     data["producer_name_address"] = importer
+            # Wine default: TTB requires sulfite declaration for wines >=10 ppm; if no
+            # statement found (neither positive nor negative), assume CONTAINS SULFITES
+            if not data.get("contains_sulfites") and data.get("class_type") == "Wine":
+                data["contains_sulfites"] = "CONTAINS SULFITES"
             return LabelFields(**data)
     finally:
         if stitched:
@@ -203,8 +207,10 @@ async def _extract_sulfites(client: httpx.AsyncClient, image_b64: str) -> Option
             "messages": [{"role": "user",
                 "content": (
                     'Look at this alcohol label image carefully. '
-                    'Search every panel for any text mentioning sulfites, such as '
-                    '"CONTAINS SULFITES", "Contains Sulfating Agents", or similar. '
+                    'Search every panel for any text about sulfites — including BOTH '
+                    'positive statements like "CONTAINS SULFITES", "Contains Sulfating Agents" '
+                    'AND negative statements like "SULFITE FREE", "NO SULFITES ADDED", '
+                    '"Contains No Detectable Sulfites". '
                     'Reply with just that exact text if you find it, or reply with '
                     'the single word "none" if no sulfite statement is present.'
                 ),

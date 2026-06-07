@@ -6,6 +6,15 @@ from app.models.result import FieldResult, FieldStatus, VerificationResult
 
 _REQUIRED_WARNING_PREFIX = "GOVERNMENT WARNING:"
 
+# Matches negation words that turn a sulfite mention into a "no sulfites" statement
+_SULFITE_ABSENT_RE = re.compile(
+    r'\b(free|no\b|none|without|not\s+detected|undetectable)\b', re.IGNORECASE
+)
+
+
+def _sulfite_absent(text: str) -> bool:
+    return bool(_SULFITE_ABSENT_RE.search(text))
+
 
 def check_government_warning(
     extracted: Optional[str], submitted: Optional[str]
@@ -159,8 +168,16 @@ def check_sulfites(extracted: Optional[str], submitted: Optional[str]) -> FieldR
             extracted_value=None,
             submitted_value=submitted,
         )
-    sub_has = bool(submitted and "sulfite" in submitted.lower())
-    passes = sub_has
+    sub_declares = bool(submitted and "sulfite" in submitted.lower())
+    if not sub_declares:
+        return FieldResult(
+            field="contains_sulfites",
+            status=FieldStatus.FAIL,
+            extracted_value=extracted,
+            submitted_value=submitted,
+        )
+    # Both sides mention sulfites — verify they agree on presence vs absence
+    passes = _sulfite_absent(extracted) == _sulfite_absent(submitted)
     return FieldResult(
         field="contains_sulfites",
         status=FieldStatus.PASS if passes else FieldStatus.FAIL,
