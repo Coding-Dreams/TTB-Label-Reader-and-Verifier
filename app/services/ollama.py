@@ -33,6 +33,7 @@ Required JSON format:
   "net_contents": "string or null",
   "contains_sulfites": "string or null",
   "producer_name_address": "string or null",
+  "us_importer": "string or null",
   "country_of_origin": "string or null",
   "government_warning": "string or null"
 }
@@ -44,9 +45,23 @@ Rules:
 - alcohol_content: the ABV percentage as printed (e.g. "45% ALC/VOL", "13% BY VOL")
 - net_contents: the TOTAL container size (e.g. "750 ML", "100 mL", "1 PINT") — the full bottle/can volume, NOT the alcohol-per-serving amount
 - contains_sulfites: search ALL panels for any sulfite statement — this includes BOTH positive declarations (e.g. "CONTAINS SULFITES", "Contains Sulfating Agents") AND negative declarations (e.g. "SULFITE FREE", "NO SULFITES ADDED", "Contains No Detectable Sulfites"); return the exact text if found, null if absent
-- producer_name_address: the COMPLETE producer/bottler/importer entry as printed — capture BOTH the company name AND the full location (city, state/country) as one value (e.g. "ABC DISTILLERY FREDERICK, MD", "IMPORTED BY: 12345 IMPORTS MIAMI, FL"); do NOT return just the name or just the address alone; if BOTH a foreign producer AND a US importer/bottler/distributor are listed, return the IMPORTER/BOTTLER/DISTRIBUTOR entry — NOT the foreign producer
+- producer_name_address: the FOREIGN winery, distillery, brewery, or producer — the entity that physically made the product, with their non-US address (e.g. "CHATEAU DUPONT, BORDEAUX, FRANCE", "H. MOUNIER, COGNAC, FRANCE"); null if the producer is US-based
+- us_importer: the US IMPORTER, BOTTLER, or DISTRIBUTOR — a company with a United States city and state; look for phrases like "IMPORTED BY:", "SOLE IMPORTER:", "BOTTLED BY:", "DISTRIBUTED BY:" followed by a US company name and address (e.g. "IMPORTED BY: ACME SPIRITS, MIAMI, FL", "BOTTLED BY: ABC DISTILLERY, LOUISVILLE, KY"); null if no US entity is listed
 - country_of_origin: the country name, but ONLY if explicitly stated as the product's origin (e.g. "Product of Canada", "Made in Germany", "Imported from France"). Do NOT infer from the beverage category or style name — "American Red Wine" does NOT mean country_of_origin is "United States"
-- government_warning: the COMPLETE warning text EXACTLY as printed, including the "GOVERNMENT WARNING:" heading if present"""
+- government_warning: the COMPLETE warning text EXACTLY as printed, including the "GOVERNMENT WARNING:" heading if present
+
+Example output for an imported cognac label:
+{
+  "brand_name": "FORCE 53",
+  "class_type": "Distilled Spirits",
+  "alcohol_content": "53% ALC/VOL (106 PROOF)",
+  "net_contents": "750 ML",
+  "contains_sulfites": null,
+  "producer_name_address": "H. MOUNIER, JARNAC, FRANCE",
+  "us_importer": "IMPORTED BY: SIDNEY FRANK IMPORTING CO., INC., NEW ROCHELLE, NY 10801",
+  "country_of_origin": "France",
+  "government_warning": "GOVERNMENT WARNING: (1) According to the Surgeon General, women should not drink alcoholic beverages during pregnancy because of the risk of birth defects. (2) Consumption of alcoholic beverages impairs your ability to drive a car or operate machinery, and may cause health problems."
+}"""
 
 
 def _encode_image(image_path: Path, max_side: int = _MAX_SIDE, enhance: bool = False) -> str:
@@ -149,15 +164,6 @@ async def extract_label_fields(
             if not data.get("net_contents"):
                 net_b64 = back_b64 or image_b64
                 data["net_contents"] = await _extract_net_contents(client, net_b64)
-            # If producer looks foreign (no US state at end), search the back panel for a US importer.
-            # Always overwrite — if no US importer found (None), clear the foreign value so the
-            # comparator returns FAIL rather than passing with a wrong foreign address.
-            importer_b64 = back_b64 or image_b64
-            producer = data.get("producer_name_address")
-            if isinstance(producer, str) and not _is_us_address(producer):
-                importer = await _extract_importer(client, importer_b64)
-                if importer:
-                    data["producer_name_address"] = importer
             return LabelFields(**data)
     finally:
         if stitched:
@@ -346,10 +352,10 @@ def _parse_json(raw: str) -> dict:
 
 _FIELD_NAMES = {
     "brand_name", "class_type", "alcohol_content", "net_contents",
-    "producer_name_address", "country_of_origin", "government_warning", "contains_sulfites",
+    "producer_name_address", "us_importer", "country_of_origin", "government_warning", "contains_sulfites",
 }
 
-_SINGLE_LINE_FIELDS = {"brand_name", "class_type", "alcohol_content", "net_contents", "country_of_origin", "contains_sulfites"}
+_SINGLE_LINE_FIELDS = {"brand_name", "class_type", "alcohol_content", "net_contents", "country_of_origin", "contains_sulfites", "us_importer"}
 _NULL_SENTINELS = {"none", "null", "n/a", "na", "[none]", "unknown", "-"}
 _INVALID_COUNTRIES = {"american", "domestic", "imported", "local"}
 
@@ -530,6 +536,12 @@ def _postprocess(data: dict) -> dict:
     if isinstance(ct, str):
         normalized = _normalize_class_type(ct)
         data["class_type"] = normalized  # None if unrecognizable → triggers fallback call
+
+    # If the model extracted a dedicated US importer, it takes precedence over
+    # the foreign producer — merge into the single producer_name_address field.
+    us_importer = data.pop("us_importer", None)
+    if us_importer:
+        data["producer_name_address"] = us_importer
 
     # Last-resort brand_name fallback for import labels
     if not data.get("brand_name") and data.get("producer_name_address"):
