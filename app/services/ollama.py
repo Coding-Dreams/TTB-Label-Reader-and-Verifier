@@ -132,13 +132,14 @@ async def extract_label_fields(
                 data["brand_name"] = await _extract_brand_name(client, image_b64)
             if not data.get("class_type"):
                 data["class_type"] = await _extract_class_type(client, image_b64)
-            # If producer looks foreign (no US state at end), search the back panel for a US importer
+            # If producer looks foreign (no US state at end), search the back panel for a US importer.
+            # Always overwrite — if no US importer found (None), clear the foreign value so the
+            # comparator returns NOT_DETECTED rather than failing against a wrong address.
             importer_b64 = back_b64 or image_b64
             producer = data.get("producer_name_address")
             if isinstance(producer, str) and not _US_ADDRESS_TAIL_RE.search(producer):
                 importer = await _extract_importer(client, importer_b64)
-                if importer:
-                    data["producer_name_address"] = importer
+                data["producer_name_address"] = importer
             # Wine default: TTB requires sulfite declaration for wines >=10 ppm; if no
             # statement found (neither positive nor negative), assume CONTAINS SULFITES
             if not data.get("contains_sulfites") and data.get("class_type") == "Wine":
