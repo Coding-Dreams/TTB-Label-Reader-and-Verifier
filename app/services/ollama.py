@@ -273,12 +273,16 @@ async def _extract_importer(client: httpx.AsyncClient, image_b64: str) -> Option
     )
     resp.raise_for_status()
     result = resp.json()["message"]["content"].strip().split("\n")[0].strip()
-    if result.lower() in _NULL_SENTINELS or result.lower() in ("no", "not found", "not present", "not listed"):
+    is_null = result.lower() in _NULL_SENTINELS or result.lower() in ("no", "not found", "not present", "not listed")
+    if is_null:
+        logger.warning("_extract_importer raw=%r accepted=None (null sentinel)", result)
         return None
-    # Only accept if it contains a US address tail — guards against the model
-    # returning the foreign producer again or a generic non-address string
-    accepted = bool(_US_ADDRESS_TAIL_RE.search(result))
-    logger.warning("_extract_importer raw=%r accepted=%s", result, accepted)
+    # Accept if it has a US address tail (city, STATE) OR a US corporate identifier
+    # (LLC, Inc., L.L.C., etc.) — some importers are printed without a full address.
+    has_us_address = bool(_US_ADDRESS_TAIL_RE.search(result))
+    has_us_corp = bool(_US_COMPANY_RE.search(result))
+    accepted = has_us_address or has_us_corp
+    logger.warning("_extract_importer raw=%r us_address=%s us_corp=%s accepted=%s", result, has_us_address, has_us_corp, accepted)
     return result if accepted else None
 
 
@@ -406,6 +410,9 @@ _US_ADDRESS_TAIL_RE = re.compile(
 
 # Strips a trailing country/country-code suffix before address matching
 _TRAILING_USA_RE = re.compile(r',?\s*U\.?S\.?A?\.?\s*$', re.IGNORECASE)
+# US corporate entity suffixes — accept importer results that name a US company
+# even when the label omits the city/state address
+_US_COMPANY_RE = re.compile(r'\b(?:LLC|L\.L\.C\.|Inc\.?|Corp\.?|Ltd\.?|Co\.)\b', re.IGNORECASE)
 # Normalizes dotted state abbreviations like N.Y. or D.C. to NY / DC
 _DOTTED_ABBREV_RE = re.compile(r'\b([A-Z])\.([A-Z])\.?\s*$')
 
