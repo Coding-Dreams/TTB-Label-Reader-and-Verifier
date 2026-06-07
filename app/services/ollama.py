@@ -40,7 +40,7 @@ Required JSON format:
 Rules:
 - Return the exact text as it appears on the label for all fields except class_type
 - brand_name: the label/product name printed on the front that identifies this specific product (e.g. "ABC Single Barrel", "Honey Huckleberry Pie", "12345 Imports") — often the most prominent or stylistic name; do NOT capture the producer, brewery, winery, or distillery company name
-- class_type: EXACTLY one of three values — "Wine", "Malt Beverage", or "Distilled Spirits" — based on what category of alcohol this is. Wine = grape/fruit wines, champagne, prosecco, cider. Malt Beverage = beer, ale, lager, stout, porter, IPA, hard seltzer. Distilled Spirits = whiskey, bourbon, rum, vodka, gin, tequila, brandy, liqueur, and similar spirits
+- class_type: EXACTLY one of three values — "Wine", "Malt Beverage", or "Distilled Spirits". Wine = grape/fruit wines, champagne, prosecco, cider. Malt Beverage = beer, ale, lager, stout, porter, IPA, hard seltzer. Distilled Spirits = whiskey, bourbon, rum, vodka, gin, tequila, brandy, liqueur, and similar spirits. IMPORTANT: if the label shows any distilled spirit name (VODKA, GIN, RUM, WHISKEY, TEQUILA, etc.) classify as "Distilled Spirits" even if it is a flavored or canned cocktail — only use "Malt Beverage" if no distilled spirit name is present
 - alcohol_content: the ABV percentage as printed (e.g. "45% ALC/VOL", "13% BY VOL")
 - net_contents: the TOTAL container size (e.g. "750 ML", "100 mL", "1 PINT") — the full bottle/can volume, NOT the alcohol-per-serving amount
 - contains_sulfites: search ALL panels for any sulfite statement — this includes BOTH positive declarations (e.g. "CONTAINS SULFITES", "Contains Sulfating Agents") AND negative declarations (e.g. "SULFITE FREE", "NO SULFITES ADDED", "Contains No Detectable Sulfites"); return the exact text if found, null if absent
@@ -190,6 +190,9 @@ async def _extract_class_type(client: httpx.AsyncClient, image_b64: str) -> Opti
                     "Wine = grape or fruit wine, champagne, prosecco, cider, mead. "
                     "Malt Beverage = beer, ale, lager, stout, porter, IPA, hard seltzer, or any malt-based drink. "
                     "Distilled Spirits = whiskey, bourbon, rye, rum, vodka, gin, tequila, brandy, cognac, liqueur, or any distilled spirit. "
+                    "IMPORTANT: If the label shows the word 'VODKA', 'GIN', 'RUM', 'WHISKEY', 'TEQUILA', or any other distilled spirit name — "
+                    "classify as 'Distilled Spirits' even if the product is a flavored cocktail, mixed drink, or comes in a can or pouch. "
+                    "Only classify as 'Malt Beverage' if the label explicitly says beer, ale, lager, brewed, or malt-based with NO distilled spirit name present. "
                     "Reply with ONLY the category name, nothing else."
                 ),
                 "images": [image_b64]}],
