@@ -162,11 +162,11 @@ def test_extract_fields(api, folder):
         extracted = data.get(field)
         if not _field_matches(extracted, expected, threshold):
             failures.append(
-                f"  {field}: expected ~'{expected}' (threshold {threshold}%), got '{extracted}'"
+                f"{field}: expected ~'{expected}' got '{extracted}'"
             )
 
     if failures:
-        pytest.fail(f"{folder.name} extraction failures:\n" + "\n".join(failures))
+        pytest.fail(f"{folder.name} extraction failures: " + "; ".join(failures))
 
 
 # ---------------------------------------------------------------------------
@@ -190,12 +190,12 @@ def test_verify_passes_with_truth_data(api, folder):
     result = resp.json()
 
     failing_details = [
-        f"  {f['field']}: got '{f.get('extracted_value')}' expected '{f.get('submitted_value')}'"
+        f"{f['field']}: got '{f.get('extracted_value')}' expected '{f.get('submitted_value')}'"
         for f in result["fields"] if f["status"] == "fail"
     ]
     if expected_overall:
         if not result["overall_pass"]:
-            pytest.fail(f"{folder.name} — expected overall pass but got failures:\n" + "\n".join(failing_details))
+            pytest.fail(f"{folder.name} — expected overall pass but got failures: " + "; ".join(failing_details))
     else:
         if result["overall_pass"]:
             pytest.fail(f"{folder.name} — expected overall FAIL (non-compliant label) but got pass")
