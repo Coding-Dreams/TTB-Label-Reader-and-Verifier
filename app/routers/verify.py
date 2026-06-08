@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Optional
 
 import httpx
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 
 from app.models.label import LabelFields
 from app.services.comparator import compare_label
@@ -28,14 +28,19 @@ def _save_upload(upload: UploadFile, prefix: str) -> Path:
 async def extract(
     image: UploadFile = File(...),
     back_image: Optional[UploadFile] = File(default=None),
+    verbose: bool = Query(default=False),
 ):
     tmp = _save_upload(image, "tmp")
     tmp_back: Optional[Path] = None
     try:
         if back_image and back_image.filename:
             tmp_back = _save_upload(back_image, "tmp_back")
-        fields = await extract_label_fields(tmp, tmp_back)
-        return fields.model_dump()
+        debug_info: Optional[dict] = {} if verbose else None
+        fields = await extract_label_fields(tmp, tmp_back, debug_info=debug_info)
+        result = fields.model_dump()
+        if verbose and debug_info is not None:
+            result["_debug"] = debug_info
+        return result
     except httpx.TimeoutException:
         raise HTTPException(status_code=504, detail="Model took too long — try again")
     except httpx.ConnectError:

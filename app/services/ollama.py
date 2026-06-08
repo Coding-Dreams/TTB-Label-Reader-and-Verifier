@@ -416,7 +416,9 @@ def _postprocess(data: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 async def extract_label_fields(
-    image_path: Path, back_image_path: Optional[Path] = None
+    image_path: Path,
+    back_image_path: Optional[Path] = None,
+    debug_info: Optional[dict] = None,
 ) -> LabelFields:
     loop = asyncio.get_running_loop()
 
@@ -441,6 +443,11 @@ async def extract_label_fields(
         prompt = _SEMANTIC_PROMPT_TEMPLATE.format(ocr_text=ocr_context)
         raw = await _call_ollama(client, front_b64, prompt)
         vlm_data = _postprocess(_parse_json(raw))
+
+    if debug_info is not None:
+        debug_info["ocr_text"] = combined_text or "(empty)"
+        debug_info["rule_data"] = rule_data
+        debug_info["vlm_data"] = vlm_data
 
     # Merge: Stage 2 (rules) takes precedence for structured fields;
     # Stage 3 (VLM) fills semantic fields rules cannot handle.

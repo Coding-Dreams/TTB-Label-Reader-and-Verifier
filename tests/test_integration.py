@@ -74,14 +74,51 @@ def _load_truth(folder: Path) -> dict:
         return json.load(f)
 
 
-def _extract(front: Path, back: Optional[Path] = None, timeout: int = 60) -> httpx.Response:
+def _extract(front: Path, back: Optional[Path] = None, timeout: int = 60, verbose: bool = False) -> httpx.Response:
+    params = {"verbose": "true"} if verbose else {}
     with contextlib.ExitStack() as stack:
         fh = stack.enter_context(open(front, "rb"))
         files = [("image", (front.name, fh))]
         if back:
             bh = stack.enter_context(open(back, "rb"))
             files.append(("back_image", (back.name, bh)))
-        return httpx.post(f"{API_BASE}/extract", files=files, timeout=timeout)
+        return httpx.post(f"{API_BASE}/extract", files=files, params=params, timeout=timeout)
+
+
+def _print_pipeline_trace(folder_name: str, data: dict) -> None:
+    debug = data.get("_debug", {})
+    ocr_text = debug.get("ocr_text", "(not available)")
+    rule_data = debug.get("rule_data", {})
+    vlm_data = debug.get("vlm_data", {})
+
+    sep = "─" * 72
+    print(f"\n{sep}")
+    print(f"  {folder_name}  ·  PIPELINE TRACE")
+    print(sep)
+
+    print("\n── Stage 1: OCR text ──")
+    for line in ocr_text.splitlines():
+        stripped = line.strip()
+        if stripped:
+            print(f"  {stripped}")
+
+    print("\n── Stage 2: Rule extraction ──")
+    if rule_data:
+        for k, v in rule_data.items():
+            print(f"  {k:<25} {v!r}")
+    else:
+        print("  (no fields matched)")
+
+    print("\n── Stage 3: VLM extraction ──")
+    semantic_keys = ("brand_name", "class_type", "producer_name_address", "country_of_origin")
+    for k in semantic_keys:
+        print(f"  {k:<25} {vlm_data.get(k)!r}")
+
+    print("\n── Merged result ──")
+    for k, v in data.items():
+        if not k.startswith("_"):
+            print(f"  {k:<25} {v!r}")
+    print()
 
 
 def _verify(
@@ -141,7 +178,7 @@ _LABEL_FOLDERS = (
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("folder", _LABEL_FOLDERS, ids=[f.name for f in _LABEL_FOLDERS])
-def test_extract_fields(api, folder):
+def test_extract_fields(api, folder, show_ocr):
     front, back = _get_label_images(folder)
     if not front:
         pytest.skip(f"No image found in {folder.name}")
@@ -150,9 +187,12 @@ def test_extract_fields(api, folder):
     if not truth:
         pytest.skip(f"No truth JSON in {folder.name}")
 
-    resp = _extract(front, back)
+    resp = _extract(front, back, verbose=show_ocr)
     assert resp.status_code == 200, f"Extract failed: {resp.text}"
     data = resp.json()
+
+    if show_ocr:
+        _print_pipeline_trace(folder.name, data)
 
     failures = []
     for field, threshold in _FIELD_THRESHOLDS.items():
