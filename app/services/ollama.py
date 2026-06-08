@@ -299,16 +299,30 @@ async def extract_label_fields(
             if debug_info is not None:
                 debug_info["secondary"]["government_warning"] = {"raw": gw_ocr, "accepted": gw_ocr}
 
-            # OCR-based sulfite gate: if the VLM said the label contains sulfites but
-            # OCR finds no 'sulfite'/'sulphite' anywhere, the VLM hallucinated and we
-            # null the field. We don't override when the VLM said None (Phase B
-            # compliance test will flag wines missing the declaration anyway).
+            # OCR-based sulfite gate — only applied to NON-WINE class types.
+            # Per 27 CFR 4.32a, wines essentially always carry a sulfite declaration
+            # (positive or negative). The VLM is reliable here and OCR on small or
+            # low-resolution wine labels often fails to find the declaration even
+            # when it's clearly present (e.g. COLA1 'Contains Sulfities' OCR misread,
+            # COLA12 labels too small for OCR). Trusting the VLM on wines avoids
+            # those false negatives.
+            #
+            # For non-wines (spirits, malt beverages, RTD cocktails), a sulfite
+            # declaration is rare — when the VLM reports one it's typically a
+            # 'CONTAINS ALCOHOL' / 'CONTAINS SULFITES' confusion (COLA17/18 KIRKLAND
+            # lime drop). OCR validation is appropriate there.
             sulfite_present = await sulfite_present_future
-            if data.get("contains_sulfites") and not sulfite_present:
+            class_type_lower = (data.get("class_type") or "").strip().lower()
+            if (
+                data.get("contains_sulfites")
+                and class_type_lower != "wine"
+                and not sulfite_present
+            ):
                 if debug_info is not None:
                     debug_info["secondary"]["contains_sulfites_ocr_gate"] = {
                         "vlm_value": data["contains_sulfites"],
                         "ocr_found_mention": False,
+                        "class_type": class_type_lower,
                         "result": None,
                     }
                 data["contains_sulfites"] = None
