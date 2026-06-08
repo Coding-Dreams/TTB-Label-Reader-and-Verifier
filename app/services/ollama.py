@@ -69,16 +69,21 @@ Example output for an imported cognac label:
 }"""
 
 
-def _auto_orient(img: Image.Image) -> Image.Image:
-    """Correct image orientation: EXIF metadata first, pytesseract OSD for physical rotation."""
+def _auto_orient(img: Image.Image, back_panel: bool = False) -> Image.Image:
+    """Correct image orientation: EXIF metadata first, pytesseract OSD for physical rotation.
+
+    On front labels we only fix 180° flips — 90°/270° OSD calls are often mis-detections
+    on graphics-heavy front art. Back panels are dominated by regulatory text, so OSD is
+    much more reliable; for those we trust 90°/270° as well.
+    """
     img = ImageOps.exif_transpose(img)
     try:
         import pytesseract
         osd = pytesseract.image_to_osd(img, output_type=pytesseract.Output.DICT)
-        # Only correct upside-down (180°). 90°/270° on landscape labels with
-        # decorative imagery are frequently OSD mis-detections; phone photos
-        # with wrong sideways orientation are already fixed by exif_transpose above.
-        if int(osd.get("rotate", 0)) == 180:
+        rotate = int(osd.get("rotate", 0))
+        if back_panel and rotate in (90, 180, 270):
+            img = img.rotate(rotate, expand=True)
+        elif rotate == 180:
             img = img.rotate(180, expand=True)
     except Exception:
         pass  # tesseract unavailable or insufficient text for OSD — proceed as-is
@@ -105,11 +110,16 @@ def _crop_to_content(img: Image.Image, padding: int = 20) -> Image.Image:
     return img.crop((x0, y0, x1, y1))
 
 
-def _encode_image(image_path: Path, max_side: int = _MAX_SIDE, enhance: bool = False) -> str:
+def _encode_image(
+    image_path: Path,
+    max_side: int = _MAX_SIDE,
+    enhance: bool = False,
+    back_panel: bool = False,
+) -> str:
     with Image.open(image_path) as img:
         if img.mode in ("RGBA", "LA", "P"):
             img = img.convert("RGB")
-        img = _auto_orient(img)
+        img = _auto_orient(img, back_panel=back_panel)
         img = _crop_to_content(img)
         if enhance:
             img = ImageEnhance.Contrast(img).enhance(1.8)
@@ -129,7 +139,7 @@ def _stitch_images(front_path: Path, back_path: Path) -> Path:
     """Stitch front (left) and back (right) label images side by side at matching height."""
     with Image.open(front_path) as front_img, Image.open(back_path) as back_img:
         front_rgb = _auto_orient(front_img.convert("RGB"))
-        back_rgb = _auto_orient(back_img.convert("RGB"))
+        back_rgb = _auto_orient(back_img.convert("RGB"), back_panel=True)
 
         target_h = max(front_rgb.height, back_rgb.height)
         fw = int(front_rgb.width * target_h / front_rgb.height)
@@ -186,7 +196,9 @@ async def extract_label_fields(
             )
             effective_path = stitched
             # Encode back panel separately at full resolution for targeted second-pass lookups
-            back_b64 = await loop.run_in_executor(None, _encode_image, back_image_path)
+            back_b64 = await loop.run_in_executor(
+                None, _encode_image, back_image_path, _MAX_SIDE, False, True
+            )
         else:
             effective_path = image_path
 
@@ -208,7 +220,9 @@ async def extract_label_fields(
             # Encode at higher resolution for the dedicated sulfite scan — small-print
             # declarations are frequently missed at the default 768px.
             if back_image_path and back_image_path.exists():
-                sulfite_b64 = await loop.run_in_executor(None, _encode_image, back_image_path, 1024, True)
+                sulfite_b64 = await loop.run_in_executor(
+                    None, _encode_image, back_image_path, 1024, True, True
+                )
             else:
                 sulfite_b64 = image_b64
             if not data.get("contains_sulfites"):
@@ -248,7 +262,10 @@ async def extract_label_fields(
 
             # If producer/bottler still missing, look for it specifically on the back panel
             if not data.get("producer_name_address"):
-                prod_b64 = back_b64 or image_b64
+                # Use the high-resolution + contrast-enhanced back panel encoding so
+                # small-print producer/bottler text (e.g. COLA17/18 'DC FLYNT MW SELECTIONS')
+                # remains legible to the VLM. Falls back to stitched image when no back exists.
+                prod_b64 = sulfite_b64 if back_image_path and back_image_path.exists() else image_b64
                 sink = {} if debug_info is not None else None
                 result = await _extract_producer(client, prod_b64, _debug_sink=sink)
                 if debug_info is not None:
