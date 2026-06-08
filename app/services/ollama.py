@@ -617,11 +617,6 @@ def _postprocess(data: dict) -> dict:
             ):
                 data["country_of_origin"] = None
 
-    # Ensure government_warning includes the required prefix
-    gw = data.get("government_warning")
-    if gw:
-        data["government_warning"] = gw
-
     # Null out brand_name if it's actually the producer name
     if data.get("brand_name") and data.get("producer_name_address"):
         bn_lower = data["brand_name"].strip().lower()
