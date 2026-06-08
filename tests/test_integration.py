@@ -256,6 +256,10 @@ def test_extract_fields(api, folder, show_ocr):
 #   - producer_name_address (US producer OR US importer for imported)
 #   - government_warning == "GOVERNMENT WARNING"
 #
+# Additionally required for wines (27 CFR 4.32a):
+#   - contains_sulfites declaration (positive "CONTAINS SULFITES" or
+#     negative "SULFITE FREE" / "NO DETECTABLE SULFITES" — either satisfies)
+#
 # Truth files can set 'expected_overall: false' to flag intentionally
 # non-compliant labels (this test then expects compliance to FAIL).
 # ---------------------------------------------------------------------------
@@ -275,6 +279,10 @@ def _compliance_violations(extracted: dict) -> list[str]:
     gw = extracted.get("government_warning")
     if gw is not None and gw != "GOVERNMENT WARNING":
         violations.append(f"government_warning malformed: {gw!r}")
+    # Wine-specific: a sulfite declaration is required (positive or negative).
+    class_type = (extracted.get("class_type") or "").strip().lower()
+    if class_type == "wine" and _is_blank(extracted.get("contains_sulfites")):
+        violations.append("contains_sulfites missing (required on wine labels)")
     return violations
 
 
