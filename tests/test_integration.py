@@ -163,14 +163,23 @@ def _normalize_text(s: str) -> str:
     return unicodedata.normalize("NFKD", s.lower()).encode("ascii", errors="ignore").decode("ascii")
 
 
+def _is_blank(v) -> bool:
+    return v is None or v == ""
+
+
 def _field_matches(extracted, expected, threshold: int) -> bool:
-    if extracted is None:
-        return expected is None or expected == ""
-    if expected is None or expected == "":
-        return True  # optional — not checked for this label
+    """Strict OCR-reader match against truth.
+
+    Both blank   -> True  (truth correctly says field is absent and reader agrees)
+    One blank    -> False (truth says absent but reader extracted something, or vice versa)
+    Both present -> True if fuzzy match >= threshold (or whitespace-only diff)
+    """
+    if _is_blank(expected) and _is_blank(extracted):
+        return True
+    if _is_blank(expected) or _is_blank(extracted):
+        return False
     norm_exp = _normalize_text(str(expected))
     norm_ext = _normalize_text(str(extracted))
-    # Whitespace-only differences (e.g. "50ml" vs "50 ml") are always a match
     if re.sub(r"\s+", "", norm_exp) == re.sub(r"\s+", "", norm_ext):
         return True
     return fuzz.partial_ratio(norm_exp, norm_ext) >= threshold
@@ -199,7 +208,9 @@ _LABEL_FOLDERS = (
 
 
 # ---------------------------------------------------------------------------
-# Extract endpoint — verify extraction quality against ground truth
+# Phase A — OCR reader test: extracted fields must match truth exactly.
+# Null in truth means "field is not on this label" and the reader is expected
+# to also return null — false positives (reader hallucinated a value) fail too.
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("folder", _LABEL_FOLDERS, ids=[f.name for f in _LABEL_FOLDERS])
@@ -222,8 +233,6 @@ def test_extract_fields(api, folder, show_ocr):
     failures = []
     for field, threshold in _FIELD_THRESHOLDS.items():
         expected = truth.get(field)
-        if expected is None or expected == "":
-            continue  # not required for this label
         extracted = data.get(field)
         if not _field_matches(extracted, expected, threshold):
             failures.append(
@@ -235,7 +244,67 @@ def test_extract_fields(api, folder, show_ocr):
 
 
 # ---------------------------------------------------------------------------
-# Verify endpoint — passing submissions (truth data should produce overall_pass=True)
+# Phase B — Compliance check: the extracted fields must satisfy TTB rules
+# regardless of what the application form looks like. A label that does not
+# carry the required information is non-compliant by definition.
+#
+# Required on every alcohol label:
+#   - brand_name
+#   - class_type
+#   - alcohol_content (ABV)
+#   - net_contents
+#   - producer_name_address (US producer OR US importer for imported)
+#   - government_warning == "GOVERNMENT WARNING"
+#
+# Truth files can set 'expected_overall: false' to flag intentionally
+# non-compliant labels (this test then expects compliance to FAIL).
+# ---------------------------------------------------------------------------
+
+_TTB_REQUIRED_FIELDS = (
+    "brand_name", "class_type", "alcohol_content",
+    "net_contents", "producer_name_address", "government_warning",
+)
+
+
+def _compliance_violations(extracted: dict) -> list[str]:
+    """Return human-readable list of missing/invalid required fields, [] if compliant."""
+    violations = []
+    for field in _TTB_REQUIRED_FIELDS:
+        if _is_blank(extracted.get(field)):
+            violations.append(f"{field} missing")
+    gw = extracted.get("government_warning")
+    if gw is not None and gw != "GOVERNMENT WARNING":
+        violations.append(f"government_warning malformed: {gw!r}")
+    return violations
+
+
+@pytest.mark.parametrize("folder", _LABEL_FOLDERS, ids=[f.name for f in _LABEL_FOLDERS])
+def test_label_compliance(api, folder):
+    front, back = _get_label_images(folder)
+    if not front:
+        pytest.skip(f"No image found in {folder.name}")
+    truth = _load_truth(folder)
+    if not truth:
+        pytest.skip(f"No truth JSON in {folder.name}")
+
+    expected_compliant = truth.get("expected_overall", True)
+
+    resp = _extract(front, back)
+    assert resp.status_code == 200, f"Extract failed: {resp.text}"
+    data = resp.json()
+    violations = _compliance_violations(data)
+    is_compliant = not violations
+
+    if expected_compliant and not is_compliant:
+        pytest.fail(f"{folder.name} — expected compliant but found violations: " + "; ".join(violations))
+    if not expected_compliant and is_compliant:
+        pytest.fail(f"{folder.name} — expected non-compliant (TTB violation) but extracted data passed all required-field checks")
+
+
+# ---------------------------------------------------------------------------
+# Verify endpoint — end-to-end check that submitting truth data as form input
+# returns overall_pass=True. Compliance failures (expected_overall: false)
+# are owned by test_label_compliance, so we skip them here.
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("folder", _LABEL_FOLDERS, ids=[f.name for f in _LABEL_FOLDERS])
@@ -247,23 +316,19 @@ def test_verify_passes_with_truth_data(api, folder):
     truth = _load_truth(folder)
     if not truth:
         pytest.skip(f"No truth JSON in {folder.name}")
-
-    expected_overall = truth.get("expected_overall", True)
+    if not truth.get("expected_overall", True):
+        pytest.skip(f"{folder.name} is a non-compliant label — covered by test_label_compliance")
 
     resp = _verify(front, back, form_data=_truth_as_form(truth))
     assert resp.status_code == 200, f"Verify failed: {resp.text}"
     result = resp.json()
 
-    failing_details = [
-        f"{f['field']}: got '{f.get('extracted_value')}' expected '{f.get('submitted_value')}'"
-        for f in result["fields"] if f["status"] == "fail"
-    ]
-    if expected_overall:
-        if not result["overall_pass"]:
-            pytest.fail(f"{folder.name} — expected overall pass but got failures: " + "; ".join(failing_details))
-    else:
-        if result["overall_pass"]:
-            pytest.fail(f"{folder.name} — expected overall FAIL (non-compliant label) but got pass")
+    if not result["overall_pass"]:
+        failing_details = [
+            f"{f['field']}: got '{f.get('extracted_value')}' expected '{f.get('submitted_value')}'"
+            for f in result["fields"] if f["status"] == "fail"
+        ]
+        pytest.fail(f"{folder.name} — expected overall pass but got failures: " + "; ".join(failing_details))
 
 
 # ---------------------------------------------------------------------------
