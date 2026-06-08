@@ -288,9 +288,7 @@ async def extract_label_fields(
 async def _extract_brand_name(
     client: httpx.AsyncClient, image_b64: str, _debug_sink: Optional[dict] = None
 ) -> Optional[str]:
-    resp = await client.post(
-        f"{OLLAMA_BASE_URL}/api/chat",
-        json={
+    resp = await _post_with_retry(client, {
             "model": MODEL,
             "messages": [{"role": "user",
                 "content": (
@@ -306,9 +304,7 @@ async def _extract_brand_name(
             "stream": False,
             "keep_alive": -1,
             "options": {"temperature": 0.1},
-        },
-    )
-    resp.raise_for_status()
+        })
     result = resp.json()["message"]["content"].strip().split("\n")[0].strip()
     if _debug_sink is not None:
         _debug_sink["raw"] = result
@@ -320,9 +316,7 @@ async def _extract_brand_name(
 async def _extract_class_type(
     client: httpx.AsyncClient, image_b64: str, _debug_sink: Optional[dict] = None
 ) -> Optional[str]:
-    resp = await client.post(
-        f"{OLLAMA_BASE_URL}/api/chat",
-        json={
+    resp = await _post_with_retry(client, {
             "model": MODEL,
             "messages": [{"role": "user",
                 "content": (
@@ -341,9 +335,7 @@ async def _extract_class_type(
             "stream": False,
             "keep_alive": -1,
             "options": {"temperature": 0.1},
-        },
-    )
-    resp.raise_for_status()
+        })
     result = resp.json()["message"]["content"].strip().split("\n")[0].strip()
     if _debug_sink is not None:
         _debug_sink["raw"] = result
@@ -355,9 +347,7 @@ async def _extract_class_type(
 async def _extract_sulfites(
     client: httpx.AsyncClient, image_b64: str, _debug_sink: Optional[dict] = None
 ) -> Optional[str]:
-    resp = await client.post(
-        f"{OLLAMA_BASE_URL}/api/chat",
-        json={
+    resp = await _post_with_retry(client, {
             "model": MODEL,
             "messages": [{"role": "user",
                 "content": (
@@ -373,9 +363,7 @@ async def _extract_sulfites(
             "stream": False,
             "keep_alive": -1,
             "options": {"temperature": 0.1},
-        },
-    )
-    resp.raise_for_status()
+        })
     result = resp.json()["message"]["content"].strip()
     if _debug_sink is not None:
         _debug_sink["raw"] = result
@@ -385,9 +373,7 @@ async def _extract_sulfites(
 
 
 async def _extract_importer(client: httpx.AsyncClient, image_b64: str) -> Optional[str]:
-    resp = await client.post(
-        f"{OLLAMA_BASE_URL}/api/chat",
-        json={
+    resp = await _post_with_retry(client, {
             "model": MODEL,
             "messages": [{"role": "user",
                 "content": (
@@ -405,9 +391,7 @@ async def _extract_importer(client: httpx.AsyncClient, image_b64: str) -> Option
             "stream": False,
             "keep_alive": -1,
             "options": {"temperature": 0.1},
-        },
-    )
-    resp.raise_for_status()
+        })
     result = resp.json()["message"]["content"].strip().split("\n")[0].strip()
     is_null = result.lower() in _NULL_SENTINELS or result.lower() in ("no", "not found", "not present", "not listed")
     if is_null:
@@ -425,9 +409,7 @@ async def _extract_importer(client: httpx.AsyncClient, image_b64: str) -> Option
 async def _extract_producer(
     client: httpx.AsyncClient, image_b64: str, _debug_sink: Optional[dict] = None
 ) -> Optional[str]:
-    resp = await client.post(
-        f"{OLLAMA_BASE_URL}/api/chat",
-        json={
+    resp = await _post_with_retry(client, {
             "model": MODEL,
             "messages": [{"role": "user",
                 "content": (
@@ -445,9 +427,7 @@ async def _extract_producer(
             "stream": False,
             "keep_alive": -1,
             "options": {"temperature": 0.1},
-        },
-    )
-    resp.raise_for_status()
+        })
     result = resp.json()["message"]["content"].strip().split("\n")[0].strip()
     if _debug_sink is not None:
         _debug_sink["raw"] = result
@@ -459,9 +439,7 @@ async def _extract_producer(
 async def _extract_net_contents(
     client: httpx.AsyncClient, image_b64: str, _debug_sink: Optional[dict] = None
 ) -> Optional[str]:
-    resp = await client.post(
-        f"{OLLAMA_BASE_URL}/api/chat",
-        json={
+    resp = await _post_with_retry(client, {
             "model": MODEL,
             "messages": [{"role": "user",
                 "content": (
@@ -476,9 +454,7 @@ async def _extract_net_contents(
             "stream": False,
             "keep_alive": -1,
             "options": {"temperature": 0.1},
-        },
-    )
-    resp.raise_for_status()
+        })
     result = resp.json()["message"]["content"].strip().split("\n")[0].strip()
     if _debug_sink is not None:
         _debug_sink["raw"] = result
@@ -489,29 +465,59 @@ async def _extract_net_contents(
     return result
 
 
+_TRANSIENT_HTTPX = (
+    httpx.ConnectError,
+    httpx.RemoteProtocolError,
+    httpx.ReadError,
+    httpx.ReadTimeout,
+    httpx.PoolTimeout,
+)
+
+
+async def _post_with_retry(
+    client: httpx.AsyncClient, json_body: dict, attempts: int = 3, backoff: float = 5.0
+) -> httpx.Response:
+    """POST to Ollama /api/chat with retry on transient connection / read errors.
+
+    The Ollama container occasionally drops connections mid-request under load
+    ('Server disconnected without sending a response'); retrying lets the call
+    survive a single bad attempt rather than failing the whole verification.
+    """
+    last_exc: Optional[Exception] = None
+    for attempt in range(attempts):
+        try:
+            resp = await client.post(f"{OLLAMA_BASE_URL}/api/chat", json=json_body)
+            resp.raise_for_status()
+            return resp
+        except _TRANSIENT_HTTPX as exc:
+            last_exc = exc
+            if attempt == attempts - 1:
+                raise
+            logger.warning(
+                "Ollama transient error (attempt %d/%d), retrying in %.1fs: %s",
+                attempt + 1, attempts, backoff, exc,
+            )
+            await asyncio.sleep(backoff)
+    raise last_exc  # unreachable, but satisfies type checker
+
+
 async def _call_ollama(
     client: httpx.AsyncClient, image_b64: str, prompt: str
 ) -> str:
-    for attempt in range(3):
-        try:
-            resp = await client.post(
-                f"{OLLAMA_BASE_URL}/api/chat",
-                json={
-                    "model": MODEL,
-                    "messages": [{"role": "user", "content": prompt, "images": [image_b64]}],
-                    "stream": False,
-                    "format": "json",
-                    "keep_alive": -1,
-                    "options": {"temperature": 0.1},
-                },
-            )
-            resp.raise_for_status()
-            return resp.json()["message"]["content"]
-        except (httpx.ConnectError, httpx.RemoteProtocolError) as exc:
-            if attempt == 2:
-                raise
-            logger.warning("Ollama unreachable (attempt %d/3), retrying in 15s: %s", attempt + 1, exc)
-            await asyncio.sleep(15)
+    resp = await _post_with_retry(
+        client,
+        {
+            "model": MODEL,
+            "messages": [{"role": "user", "content": prompt, "images": [image_b64]}],
+            "stream": False,
+            "format": "json",
+            "keep_alive": -1,
+            "options": {"temperature": 0.1},
+        },
+        attempts=3,
+        backoff=15.0,
+    )
+    return resp.json()["message"]["content"]
 
 
 def _parse_json(raw: str) -> dict:
@@ -618,21 +624,23 @@ def _ocr_finds_warning(img, config: str = "") -> bool:
 
 
 def _any_match_parallel(tasks: list) -> bool:
-    """Submit (img, config) OCR tasks to the shared pool. True if any finds the warning."""
+    """Submit (img, config) OCR tasks to the shared pool. True if any finds the warning.
+
+    Each future's exception is handled independently — one crashed tesseract subprocess
+    must not poison the result of the other strategies. Otherwise a transient subprocess
+    failure under load makes the whole detection silently return None.
+    """
     futures = [_OCR_POOL.submit(_ocr_finds_warning, img, cfg) for img, cfg in tasks]
-    try:
-        for f in as_completed(futures):
+    for f in as_completed(futures):
+        try:
             if f.result():
                 for pending in futures:
                     if pending is not f and not pending.done():
                         pending.cancel()
                 return True
-        return False
-    finally:
-        # Already-running futures keep running in the pool until tesseract subprocess
-        # exits; their results are discarded. shutdown(wait=False) would have the same
-        # effect for a per-call pool — using a module pool avoids the create/destroy cost.
-        pass
+        except Exception as exc:
+            logger.warning("OCR strategy failed (continuing with others): %s", exc)
+    return False
 
 
 def _detect_government_warning_ocr(image_path: Path, back_image_path: Optional[Path]) -> Optional[str]:
