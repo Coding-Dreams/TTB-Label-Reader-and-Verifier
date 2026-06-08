@@ -10,6 +10,7 @@ Test label folders live in testLabels/. Each folder contains:
 """
 import contextlib
 import json
+import re
 import unicodedata
 import pytest
 import httpx
@@ -167,7 +168,12 @@ def _field_matches(extracted, expected, threshold: int) -> bool:
         return expected is None or expected == ""
     if expected is None or expected == "":
         return True  # optional — not checked for this label
-    return fuzz.partial_ratio(_normalize_text(str(expected)), _normalize_text(str(extracted))) >= threshold
+    norm_exp = _normalize_text(str(expected))
+    norm_ext = _normalize_text(str(extracted))
+    # Whitespace-only differences (e.g. "50ml" vs "50 ml") are always a match
+    if re.sub(r"\s+", "", norm_exp) == re.sub(r"\s+", "", norm_ext):
+        return True
+    return fuzz.partial_ratio(norm_exp, norm_ext) >= threshold
 
 
 _METADATA_KEYS = {"expected_overall"}
