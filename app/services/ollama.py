@@ -42,8 +42,11 @@ Using the OCR text above AND the label image, return ONLY valid JSON with these 
 Rules:
 - brand_name: the product/label name printed on the front (e.g. "Cascade Val", "Fete Rose", "Barenjager") — NOT the producer company name, NOT the brewery/winery/distillery name
 - class_type: EXACTLY "Wine", "Malt Beverage", or "Distilled Spirits". Wine = grape/fruit wine, champagne, cider. Malt Beverage = beer, ale, lager, IPA, hard seltzer. Distilled Spirits = whiskey, bourbon, vodka, gin, rum, tequila, brandy, cognac, liqueur. If VODKA/GIN/RUM/WHISKEY appears on the label, always use "Distilled Spirits" even for canned cocktails.
-- producer_name_address: the US BOTTLER, IMPORTER, or DOMESTIC PRODUCER — a company with a United States address. For imported products look for "IMPORTED BY:", "SOLE IMPORTER:", "BOTTLED BY:" followed by a US company and city/state. For domestic products return the US producer address. Return null only if truly no US entity is present.
-- country_of_origin: only if the label explicitly states the product's origin country (e.g. "Product of France", "Made in Germany"). Do NOT infer from beverage style. Return null otherwise.
+- producer_name_address: MUST be a US entity — either:
+  (a) US IMPORTER for foreign products: look for "IMPORTED BY:", "SOLE IMPORTER:", "BOTTLED BY:", or "IMPORTED AND BOTTLED BY:" followed by a US company name and US city/state abbreviation. Use that US company, not the foreign producer.
+  (b) US DOMESTIC PRODUCER for American products: the brewery, winery, or distillery name and US address (city, state).
+  NEVER return a foreign company or foreign address. Return null only if there is truly no US entity anywhere on the label.
+- country_of_origin: only if the label explicitly states the product's origin country (e.g. "Product of France", "Made in Germany", "Product of New Zealand"). Always return in English (e.g. "AUSTRIA" not "Österreich"). Do NOT infer from beverage style. Return null otherwise.
 - Set any field to null if not found.
 
 Return ONLY the JSON object, no markdown, no explanation.
@@ -54,6 +57,14 @@ Example for an imported Austrian wine with an NJ importer:
   "class_type": "Wine",
   "producer_name_address": "Niche W. & S., CEDAR KNOLLS, NJ",
   "country_of_origin": "AUSTRIA"
+}}
+
+Example for a domestic Michigan wine:
+{{
+  "brand_name": "Cascade Val",
+  "class_type": "Wine",
+  "producer_name_address": "Cascade Winery, Grand Rapids, MI",
+  "country_of_origin": null
 }}"""
 
 # ---------------------------------------------------------------------------
@@ -66,15 +77,23 @@ _GOV_WARNING_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
-# Matches ABV statements: "35%", "13.0% ALC by VOL", "ALC. 21% BY VOL. / 42 PROOF"
-_ABV_RE = re.compile(
-    r'(\d+\.?\d*\s*%(?:\s*(?:alc\.?[/\s]?vol\.?|by\s+vol\.?|proof))?(?:\s*/\s*\d+\s*proof)?)',
+# Matches ABV with an explicit ALC/VOL/PROOF qualifier (primary)
+_ABV_QUALIFIED_RE = re.compile(
+    r'(\d+\.?\d*\s*%\s*[./]?\s*(?:alc\.?(?:[/\s.]?vol\.?)?|by\s+vol\.?|proof)(?:\s*/\s*\d+\s*proof)?)',
     re.IGNORECASE,
 )
+# Bare percentage fallback — value filtered to plausible ABV range in code
+_ABV_BARE_RE = re.compile(r'(\d+\.?\d*)\s*%')
 
 # Matches volume quantities: "750ml", "1.5L", "100mL", "1 pint"
 _VOLUME_RE = re.compile(
     r'(\d+\.?\d*\s*(?:ml\b|l\b|fl\.?\s*oz\b|fluid\s*oz\b|pint\b))',
+    re.IGNORECASE,
+)
+
+# Matches net contents stated explicitly (preferred over incidental volume mentions)
+_NET_CONTEXT_RE = re.compile(
+    r'net\s+contents?\s*:?\s*(\d+\.?\d*\s*(?:ml\b|l\b|fl\.?\s*oz\b|fluid\s*oz\b|pint\b))',
     re.IGNORECASE,
 )
 
@@ -125,6 +144,31 @@ _ORIGIN_PREFIX_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Maps native-language country names to English equivalents
+_NATIVE_COUNTRY_MAP = {
+    "österreich": "AUSTRIA",
+    "oesterreich": "AUSTRIA",
+    "allemagne": "GERMANY",
+    "deutschland": "GERMANY",
+    "frankreich": "FRANCE",
+    "espagne": "SPAIN",
+    "españa": "SPAIN",
+    "spagna": "SPAIN",
+    "italia": "ITALY",
+    "italie": "ITALY",
+    "nueva zelanda": "NEW ZEALAND",
+    "nouvelle-zélande": "NEW ZEALAND",
+    "australie": "AUSTRALIA",
+    "argentine": "ARGENTINA",
+    "grèce": "GREECE",
+    "griechenland": "GREECE",
+    "russie": "RUSSIA",
+    "rossiya": "RUSSIA",
+    "japon": "JAPAN",
+    "mexique": "MEXICO",
+    "mexiko": "MEXICO",
+}
+
 
 def _normalize_class_type(value: str) -> Optional[str]:
     v = value.strip().lower()
@@ -172,13 +216,31 @@ def _rule_extract(text: str) -> dict:
     """
     result: dict = {}
 
-    abv_m = _ABV_RE.search(text)
+    # ABV: require ALC/VOL/PROOF qualifier; fall back to bare % only if ≤ 75
+    abv_m = _ABV_QUALIFIED_RE.search(text)
     if abv_m:
-        result["alcohol_content"] = abv_m.group(1).strip()
+        result["alcohol_content"] = abv_m.group(0).strip()
+    else:
+        for m in _ABV_BARE_RE.finditer(text):
+            try:
+                if 3.0 <= float(m.group(1)) <= 75.0:
+                    result["alcohol_content"] = m.group(0).strip()
+                    break
+            except ValueError:
+                pass
 
-    vol_m = _VOLUME_RE.search(text)
-    if vol_m:
-        result["net_contents"] = vol_m.group(1).strip()
+    # Volume: prefer NET CONTENTS context, then mL/L over fl oz
+    nc_m = _NET_CONTEXT_RE.search(text)
+    if nc_m:
+        result["net_contents"] = nc_m.group(1).strip()
+    else:
+        all_vols = list(_VOLUME_RE.finditer(text))
+        if all_vols:
+            metric = [
+                m for m in all_vols
+                if re.search(r'(?:ml|(?<!f)l)\b', m.group(0), re.IGNORECASE)
+            ]
+            result["net_contents"] = (metric[0] if metric else all_vols[0]).group(0).strip()
 
     gw_m = _GOV_WARNING_RE.search(text)
     if gw_m:
@@ -293,6 +355,13 @@ def _postprocess(data: dict) -> dict:
         val = data[key]
         if isinstance(val, str) and val.strip().lower().replace(" ", "_") in _FIELD_NAMES:
             data[key] = None
+
+    # Translate native-language country names to English before further checks
+    country = data.get("country_of_origin")
+    if isinstance(country, str):
+        mapped = _NATIVE_COUNTRY_MAP.get(country.strip().lower())
+        if mapped:
+            data["country_of_origin"] = mapped
 
     # Strip leading origin phrases from country_of_origin
     country = data.get("country_of_origin")
