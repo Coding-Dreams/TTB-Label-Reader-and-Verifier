@@ -182,11 +182,14 @@ async def extract_label_fields(
 ) -> LabelFields:
     stitched: Optional[Path] = None
     loop = asyncio.get_running_loop()
-    # Kick off OCR for government_warning immediately — it only needs the raw image
-    # paths and runs in a thread pool, so it overlaps with image stitching, the main
-    # VLM call, and every secondary VLM pass. Awaited just before the final return.
+    # Kick off OCR scans immediately — they only need the raw image paths and run in
+    # a thread pool, so they overlap with image stitching, the main VLM call, and
+    # every secondary VLM pass. Awaited just before the final return.
     gw_ocr_future = loop.run_in_executor(
         None, _detect_government_warning_ocr, image_path, back_image_path
+    )
+    sulfite_present_future = loop.run_in_executor(
+        None, _label_mentions_sulfite_ocr, image_path, back_image_path
     )
     try:
         back_b64: Optional[str] = None
@@ -295,6 +298,20 @@ async def extract_label_fields(
             data["government_warning"] = gw_ocr
             if debug_info is not None:
                 debug_info["secondary"]["government_warning"] = {"raw": gw_ocr, "accepted": gw_ocr}
+
+            # OCR-based sulfite gate: if the VLM said the label contains sulfites but
+            # OCR finds no 'sulfite'/'sulphite' anywhere, the VLM hallucinated and we
+            # null the field. We don't override when the VLM said None (Phase B
+            # compliance test will flag wines missing the declaration anyway).
+            sulfite_present = await sulfite_present_future
+            if data.get("contains_sulfites") and not sulfite_present:
+                if debug_info is not None:
+                    debug_info["secondary"]["contains_sulfites_ocr_gate"] = {
+                        "vlm_value": data["contains_sulfites"],
+                        "ocr_found_mention": False,
+                        "result": None,
+                    }
+                data["contains_sulfites"] = None
 
             return LabelFields(**data)
     finally:
@@ -554,6 +571,30 @@ _SINGLE_LINE_FIELDS = {"brand_name", "class_type", "alcohol_content", "net_conte
 _NULL_SENTINELS = {"none", "null", "n/a", "na", "[none]", "unknown", "-"}
 _INVALID_COUNTRIES = {"american", "domestic", "imported", "local"}
 
+# country_of_origin is meant to mark FOREIGN origin only. Anything resolving to the
+# United States — country name variants, individual state names, state abbreviations —
+# is nulled so domestic labels show country_of_origin as None (matching truth files).
+_US_LOCATIONS = frozenset({
+    # Country variants
+    "united states", "united states of america", "america", "usa", "u.s.", "u.s.a.",
+    "us", "the usa", "the united states", "the u.s.", "the u.s.a.",
+    # 2-letter state abbreviations
+    "al", "ak", "az", "ar", "ca", "co", "ct", "de", "fl", "ga", "hi", "id", "il",
+    "in", "ia", "ks", "ky", "la", "me", "md", "ma", "mi", "mn", "ms", "mo", "mt",
+    "ne", "nv", "nh", "nj", "nm", "ny", "nc", "nd", "oh", "ok", "or", "pa", "ri",
+    "sc", "sd", "tn", "tx", "ut", "vt", "va", "wa", "wv", "wi", "wy", "dc",
+    # Full state names
+    "alabama", "alaska", "arizona", "arkansas", "california", "colorado",
+    "connecticut", "delaware", "florida", "georgia", "hawaii", "idaho", "illinois",
+    "indiana", "iowa", "kansas", "kentucky", "louisiana", "maine", "maryland",
+    "massachusetts", "michigan", "minnesota", "mississippi", "missouri", "montana",
+    "nebraska", "nevada", "new hampshire", "new jersey", "new mexico", "new york",
+    "new york state", "north carolina", "north dakota", "ohio", "oklahoma", "oregon",
+    "pennsylvania", "rhode island", "south carolina", "south dakota", "tennessee",
+    "texas", "utah", "vermont", "virginia", "washington", "washington state",
+    "west virginia", "wisconsin", "wyoming", "district of columbia",
+})
+
 # Words that appear in beverage types — used to detect if class_type is actually a product name
 _BEVERAGE_TYPE_WORDS = frozenset({
     "ale", "beer", "lager", "stout", "porter", "ipa",
@@ -631,6 +672,8 @@ _URL_SUFFIX_RE = re.compile(r'\s+(?:www|http)\.\S+.*$', re.IGNORECASE)
 _DOTTED_ABBREV_RE = re.compile(r'\b([A-Z])\.([A-Z])\.?\s*$')
 # Detects "GOVERNMENT WARNING" with possible line-break between the two words
 _GOVT_WARNING_RE = re.compile(r'GOVERNMENT\s+WARNING')
+# Case-insensitive — sulfite mentions can appear in any case on a label
+_SULFITE_MENTION_RE = re.compile(r'\bsul[fp]hite', re.IGNORECASE)
 
 
 def _ocr_finds_warning(img, config: str = "") -> bool:
@@ -638,6 +681,29 @@ def _ocr_finds_warning(img, config: str = "") -> bool:
     import pytesseract
     text = pytesseract.image_to_string(img, config=config)
     return bool(_GOVT_WARNING_RE.search(text))
+
+
+def _label_mentions_sulfite_ocr(image_path: Path, back_image_path: Optional[Path]) -> bool:
+    """Quick OCR scan — True if any 'sulfite' or 'sulphite' token appears anywhere.
+
+    Cheaper than the gov_warning cascade (case-insensitive substring instead of exact
+    phrase, fewer fallback strategies) because false positives here are harmless: this
+    is a *gate* to suppress VLM sulfite hallucinations on labels that don't mention
+    sulfites at all (e.g. COLA17/18 KIRKLAND lime drop, where 'CONTAINS ALCOHOL' tricks
+    the VLM into outputting 'CONTAINS SULFITES').
+    """
+    try:
+        import pytesseract
+        for path in filter(None, [image_path, back_image_path]):
+            if not path.exists():
+                continue
+            img = ImageOps.exif_transpose(Image.open(path)).convert("L")
+            for variant in (img, img.resize((img.width * 2, img.height * 2), Image.LANCZOS)):
+                if _SULFITE_MENTION_RE.search(pytesseract.image_to_string(variant)):
+                    return True
+        return False
+    except Exception:
+        return True  # OCR unavailable — don't override the VLM result
 
 
 def _any_match_parallel(tasks: list) -> bool:
@@ -798,25 +864,18 @@ def _postprocess(data: dict) -> dict:
             data["country_of_origin"] = stripped
             country = stripped
 
-    # Null out country_of_origin if it's not an actual country name
+    # Null out country_of_origin if it's not an actual foreign country name.
+    # country_of_origin is for IMPORTED products only — domestic US labels (whether
+    # the model said "United States", "USA", or a state name) should resolve to None.
     country = data.get("country_of_origin")
     if isinstance(country, str):
-        if re.fullmatch(r"[A-Z]{2}", country.strip()):
+        normalized = country.strip().lower()
+        if (
+            re.fullmatch(r"[A-Z]{2}", country.strip())
+            or normalized in _INVALID_COUNTRIES
+            or normalized in _US_LOCATIONS
+        ):
             data["country_of_origin"] = None
-        elif country.strip().lower() in _INVALID_COUNTRIES:
-            data["country_of_origin"] = None
-        else:
-            country_lower = country.strip().lower()
-            class_type = (data.get("class_type") or "").lower()
-            producer = (data.get("producer_name_address") or "").lower()
-            if country_lower in ("united states", "america") and (
-                "american" in class_type or "domestic" in class_type
-            ):
-                data["country_of_origin"] = None
-            elif country_lower in ("united states", "america", "usa", "u.s.", "u.s.a.") and (
-                "import" in producer
-            ):
-                data["country_of_origin"] = None
 
     # If brand_name is null and class_type doesn't contain any standard beverage-type
     # word, the model likely put the product name in the wrong field — swap them.
