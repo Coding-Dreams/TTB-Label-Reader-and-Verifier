@@ -674,9 +674,10 @@ _URL_SUFFIX_RE = re.compile(r'\s+(?:www|http)\.\S+.*$', re.IGNORECASE)
 _DOTTED_ABBREV_RE = re.compile(r'\b([A-Z])\.([A-Z])\.?\s*$')
 # Detects "GOVERNMENT WARNING" with possible line-break between the two words
 _GOVT_WARNING_RE = re.compile(r'GOVERNMENT\s+WARNING')
-# Matches both 'sulfite' (American) and 'sulphite' (British). The 'h' after 'p'
-# is required only in the British form; the 'f' form has no h.
-_SULFITE_MENTION_RE = re.compile(r'\bsul(?:f|ph)ite', re.IGNORECASE)
+# Matches 'sulfite' (American), 'sulphite' (British), and common OCR misreads where
+# the trailing 'e' gets garbled (e.g. tesseract reading 'Sulfities' on COLA1).
+# Requiring just 'sulfit'/'sulphit' is still distinctive — no English word collides.
+_SULFITE_MENTION_RE = re.compile(r'\bsul(?:f|ph)it', re.IGNORECASE)
 
 
 def _ocr_finds_warning(img, config: str = "") -> bool:
