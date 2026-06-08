@@ -5,10 +5,10 @@ import os
 import re
 import base64
 import json
-import tempfile
 import unicodedata
 from typing import Optional
 import httpx
+import pytesseract
 from pathlib import Path
 from PIL import Image, ImageEnhance
 
@@ -18,53 +18,196 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 MODEL = "qwen2.5vl:7b"
 TIMEOUT = 120.0
 
-_MAX_SIDE = 768  # cap large uploads before encoding
-
 logger = logging.getLogger(__name__)
 
-_FULL_PROMPT = """You are an OCR assistant specialized in reading alcohol beverage labels.
-Return ONLY valid JSON with no additional text. Set any field to null if not visible.
+# ---------------------------------------------------------------------------
+# Stage 3 prompt — semantic fields only; OCR text injected at call time
+# ---------------------------------------------------------------------------
 
-Required JSON format:
-{
+_SEMANTIC_PROMPT_TEMPLATE = """\
+You are an alcohol label field extractor.
+
+OCR text extracted from this label:
+{ocr_text}
+
+Using the OCR text above AND the label image, return ONLY valid JSON with these 4 fields:
+
+{{
   "brand_name": "string or null",
   "class_type": "Wine" or "Malt Beverage" or "Distilled Spirits" or null,
-  "alcohol_content": "string or null",
-  "net_contents": "string or null",
-  "contains_sulfites": "string or null",
   "producer_name_address": "string or null",
-  "us_importer": "string or null",
-  "country_of_origin": "string or null",
-  "government_warning": "string or null"
-}
+  "country_of_origin": "string or null"
+}}
 
 Rules:
-- Return the exact text as it appears on the label for all fields except class_type
-- brand_name: the label/product name printed on the front that identifies this specific product (e.g. "ABC Single Barrel", "Honey Huckleberry Pie", "12345 Imports") — often the most prominent or stylistic name; do NOT capture the producer, brewery, winery, or distillery company name
-- class_type: EXACTLY one of three values — "Wine", "Malt Beverage", or "Distilled Spirits". Wine = grape/fruit wines, champagne, prosecco, cider. Malt Beverage = beer, ale, lager, stout, porter, IPA, hard seltzer. Distilled Spirits = whiskey, bourbon, rum, vodka, gin, tequila, brandy, liqueur, and similar spirits. IMPORTANT: if the label shows any distilled spirit name (VODKA, GIN, RUM, WHISKEY, TEQUILA, etc.) classify as "Distilled Spirits" even if it is a flavored or canned cocktail — only use "Malt Beverage" if no distilled spirit name is present
-- alcohol_content: the ABV percentage as printed (e.g. "45% ALC/VOL", "13% BY VOL")
-- net_contents: the TOTAL container size (e.g. "750 ML", "100 mL", "1 PINT") — the full bottle/can volume, NOT the alcohol-per-serving amount
-- contains_sulfites: search ALL panels for any sulfite statement — this includes BOTH positive declarations (e.g. "CONTAINS SULFITES", "Contains Sulfating Agents") AND negative declarations (e.g. "SULFITE FREE", "NO SULFITES ADDED", "Contains No Detectable Sulfites"); return the exact text if found, null if absent
-- producer_name_address: the FOREIGN winery, distillery, brewery, or producer — the entity that physically made the product, with their non-US address (e.g. "CHATEAU DUPONT, BORDEAUX, FRANCE", "H. MOUNIER, COGNAC, FRANCE"); null if the producer is US-based
-- us_importer: the US IMPORTER, BOTTLER, or DISTRIBUTOR — a company with a United States city and state; look for phrases like "IMPORTED BY:", "SOLE IMPORTER:", "BOTTLED BY:", "DISTRIBUTED BY:" followed by a US company name and address (e.g. "IMPORTED BY: ACME SPIRITS, MIAMI, FL", "BOTTLED BY: ABC DISTILLERY, LOUISVILLE, KY"); null if no US entity is listed
-- country_of_origin: the country name, but ONLY if explicitly stated as the product's origin (e.g. "Product of Canada", "Made in Germany", "Imported from France"). Do NOT infer from the beverage category or style name — "American Red Wine" does NOT mean country_of_origin is "United States"
-- government_warning: the COMPLETE warning text EXACTLY as printed, including the "GOVERNMENT WARNING:" heading if present
+- brand_name: the product/label name printed on the front (e.g. "Cascade Val", "Fete Rose", "Barenjager") — NOT the producer company name, NOT the brewery/winery/distillery name
+- class_type: EXACTLY "Wine", "Malt Beverage", or "Distilled Spirits". Wine = grape/fruit wine, champagne, cider. Malt Beverage = beer, ale, lager, IPA, hard seltzer. Distilled Spirits = whiskey, bourbon, vodka, gin, rum, tequila, brandy, cognac, liqueur. If VODKA/GIN/RUM/WHISKEY appears on the label, always use "Distilled Spirits" even for canned cocktails.
+- producer_name_address: the US BOTTLER, IMPORTER, or DOMESTIC PRODUCER — a company with a United States address. For imported products look for "IMPORTED BY:", "SOLE IMPORTER:", "BOTTLED BY:" followed by a US company and city/state. For domestic products return the US producer address. Return null only if truly no US entity is present.
+- country_of_origin: only if the label explicitly states the product's origin country (e.g. "Product of France", "Made in Germany"). Do NOT infer from beverage style. Return null otherwise.
+- Set any field to null if not found.
 
-Example output for an imported cognac label:
-{
-  "brand_name": "FORCE 53",
-  "class_type": "Distilled Spirits",
-  "alcohol_content": "53% ALC/VOL (106 PROOF)",
-  "net_contents": "750 ML",
-  "contains_sulfites": null,
-  "producer_name_address": "H. MOUNIER, JARNAC, FRANCE",
-  "us_importer": "IMPORTED BY: SIDNEY FRANK IMPORTING CO., INC., NEW ROCHELLE, NY 10801",
-  "country_of_origin": "France",
-  "government_warning": "GOVERNMENT WARNING: (1) According to the Surgeon General, women should not drink alcoholic beverages during pregnancy because of the risk of birth defects. (2) Consumption of alcoholic beverages impairs your ability to drive a car or operate machinery, and may cause health problems."
-}"""
+Return ONLY the JSON object, no markdown, no explanation.
+
+Example for an imported Austrian wine with an NJ importer:
+{{
+  "brand_name": "Fete Rose",
+  "class_type": "Wine",
+  "producer_name_address": "Niche W. & S., CEDAR KNOLLS, NJ",
+  "country_of_origin": "AUSTRIA"
+}}"""
+
+# ---------------------------------------------------------------------------
+# Stage 2 regex constants
+# ---------------------------------------------------------------------------
+
+# Matches the government warning block from the keyword to end of text
+_GOV_WARNING_RE = re.compile(
+    r'(GOVERNMENT\s+WARNING\s*:.+)',
+    re.IGNORECASE | re.DOTALL,
+)
+
+# Matches ABV statements: "35%", "13.0% ALC by VOL", "ALC. 21% BY VOL. / 42 PROOF"
+_ABV_RE = re.compile(
+    r'(\d+\.?\d*\s*%(?:\s*(?:alc\.?[/\s]?vol\.?|by\s+vol\.?|proof))?(?:\s*/\s*\d+\s*proof)?)',
+    re.IGNORECASE,
+)
+
+# Matches volume quantities: "750ml", "1.5L", "100mL", "1 pint"
+_VOLUME_RE = re.compile(
+    r'(\d+\.?\d*\s*(?:ml\b|l\b|fl\.?\s*oz\b|fluid\s*oz\b|pint\b))',
+    re.IGNORECASE,
+)
+
+# Matches any sulfite mention (positive or negative)
+_SULFITE_RE = re.compile(
+    r'((?:contains?\s+)?(?:no\s+detectable\s+)?sulfites?'
+    r'|sulfiting\s+agents?'
+    r'|sulfite\s+free'
+    r'|no\s+sulfites?\s+added)',
+    re.IGNORECASE,
+)
+
+# ---------------------------------------------------------------------------
+# Postprocessing helpers (used by Stage 3 VLM output)
+# ---------------------------------------------------------------------------
+
+_FIELD_NAMES = {
+    "brand_name", "class_type", "alcohol_content", "net_contents",
+    "producer_name_address", "country_of_origin", "government_warning", "contains_sulfites",
+}
+
+_SINGLE_LINE_FIELDS = {"brand_name", "class_type", "alcohol_content", "net_contents", "country_of_origin", "contains_sulfites"}
+_NULL_SENTINELS = {"none", "null", "n/a", "na", "[none]", "unknown", "-"}
+_INVALID_COUNTRIES = {"american", "domestic", "imported", "local"}
+
+_CLASS_TYPE_KEYWORDS = [
+    ("wine", "Wine"), ("champagne", "Wine"), ("prosecco", "Wine"),
+    ("mead", "Wine"), ("cider", "Wine"), ("vermouth", "Wine"),
+    ("ale", "Malt Beverage"), ("beer", "Malt Beverage"), ("lager", "Malt Beverage"),
+    ("stout", "Malt Beverage"), ("porter", "Malt Beverage"), ("ipa", "Malt Beverage"),
+    ("malt", "Malt Beverage"), ("saison", "Malt Beverage"), ("pilsner", "Malt Beverage"),
+    ("bock", "Malt Beverage"), ("seltzer", "Malt Beverage"),
+    ("whisky", "Distilled Spirits"), ("whiskey", "Distilled Spirits"),
+    ("bourbon", "Distilled Spirits"), ("scotch", "Distilled Spirits"),
+    ("rum", "Distilled Spirits"), ("vodka", "Distilled Spirits"),
+    ("gin", "Distilled Spirits"), ("tequila", "Distilled Spirits"),
+    ("mezcal", "Distilled Spirits"), ("brandy", "Distilled Spirits"),
+    ("cognac", "Distilled Spirits"), ("liqueur", "Distilled Spirits"),
+    ("schnapps", "Distilled Spirits"), ("spirit", "Distilled Spirits"),
+]
+
+_COMPANY_TYPE_RE = re.compile(
+    r'\b(distillery|brewery|winery|vineyard|estate)\b', re.IGNORECASE
+)
+
+_ORIGIN_PREFIX_RE = re.compile(
+    r'^(?:produced?\s+in|product\s+of|made\s+in|imported?\s+from)\s+',
+    re.IGNORECASE,
+)
 
 
-def _encode_image(image_path: Path, max_side: int = _MAX_SIDE, enhance: bool = False) -> str:
+def _normalize_class_type(value: str) -> Optional[str]:
+    v = value.strip().lower()
+    if v in ("wine",):
+        return "Wine"
+    if v in ("malt beverage", "malt beverages"):
+        return "Malt Beverage"
+    if v in ("distilled spirits", "distilled spirit"):
+        return "Distilled Spirits"
+    for keyword, category in _CLASS_TYPE_KEYWORDS:
+        if keyword in v:
+            return category
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Stage 1: OCR
+# ---------------------------------------------------------------------------
+
+def _ocr_image(image_path: Path) -> str:
+    """Run Tesseract OCR on a label image panel.
+
+    Converts to greyscale, upscales to at least 1600px on the longest side,
+    and boosts contrast before OCR. PSM 3 (auto page segmentation) handles the
+    mixed layouts found on alcohol labels better than PSM 6 (uniform block).
+    """
+    with Image.open(image_path) as img:
+        img = img.convert("L")  # greyscale — reduces noise from colour backgrounds
+        w, h = img.size
+        if max(w, h) < 1600:
+            scale = 1600 / max(w, h)
+            img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+        img = ImageEnhance.Contrast(img).enhance(2.0)
+        return pytesseract.image_to_string(img, config="--psm 3")
+
+
+# ---------------------------------------------------------------------------
+# Stage 2: Rule-based extraction
+# ---------------------------------------------------------------------------
+
+def _rule_extract(text: str) -> dict:
+    """Extract structured fields from OCR text using deterministic rules.
+
+    Returns only fields matched confidently. Absent keys let Stage 3 fill them.
+    """
+    result: dict = {}
+
+    abv_m = _ABV_RE.search(text)
+    if abv_m:
+        result["alcohol_content"] = abv_m.group(1).strip()
+
+    vol_m = _VOLUME_RE.search(text)
+    if vol_m:
+        result["net_contents"] = vol_m.group(1).strip()
+
+    gw_m = _GOV_WARNING_RE.search(text)
+    if gw_m:
+        warning = re.sub(
+            r'^government\s+warning\s*:',
+            'GOVERNMENT WARNING:',
+            gw_m.group(1).strip(),
+            flags=re.IGNORECASE,
+        )
+        result["government_warning"] = warning.strip()
+
+    sf_m = _SULFITE_RE.search(text)
+    if sf_m:
+        result["contains_sulfites"] = sf_m.group(0).strip()
+
+    text_lower = text.lower()
+    for keyword, category in _CLASS_TYPE_KEYWORDS:
+        if keyword in text_lower:
+            result["class_type"] = category
+            break
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Stage 3: VLM encoding + call
+# ---------------------------------------------------------------------------
+
+def _encode_image(image_path: Path, max_side: int = 768, enhance: bool = False) -> str:
     with Image.open(image_path) as img:
         if img.mode in ("RGBA", "LA", "P"):
             img = img.convert("RGB")
@@ -78,28 +221,6 @@ def _encode_image(image_path: Path, max_side: int = _MAX_SIDE, enhance: bool = F
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=90)
         return base64.b64encode(buf.getvalue()).decode()
-
-
-def _stitch_images(front_path: Path, back_path: Path) -> Path:
-    """Stitch front (left) and back (right) label images side by side at matching height."""
-    with Image.open(front_path) as front_img, Image.open(back_path) as back_img:
-        front_rgb = front_img.convert("RGB")
-        back_rgb = back_img.convert("RGB")
-
-        target_h = max(front_rgb.height, back_rgb.height)
-        fw = int(front_rgb.width * target_h / front_rgb.height)
-        bw = int(back_rgb.width * target_h / back_rgb.height)
-        front_r = front_rgb.resize((fw, target_h), Image.LANCZOS)
-        back_r = back_rgb.resize((bw, target_h), Image.LANCZOS)
-
-        combined = Image.new("RGB", (fw + bw, target_h), (255, 255, 255))
-        combined.paste(front_r, (0, 0))
-        combined.paste(back_r, (fw, 0))
-
-        fd, tmp = tempfile.mkstemp(suffix=".jpg", prefix="stitched_")
-        os.close(fd)
-        combined.save(tmp, format="JPEG", quality=95)
-        return Path(tmp)
 
 
 async def _warmup_model() -> None:
@@ -120,213 +241,7 @@ async def _warmup_model() -> None:
         logger.warning(f"Model warmup failed (will load on first request): {e}")
 
 
-async def extract_label_fields(
-    image_path: Path, back_image_path: Optional[Path] = None
-) -> LabelFields:
-    stitched: Optional[Path] = None
-    loop = asyncio.get_running_loop()
-    try:
-        back_b64: Optional[str] = None
-        if back_image_path and back_image_path.exists():
-            stitched = await loop.run_in_executor(
-                None, _stitch_images, image_path, back_image_path
-            )
-            effective_path = stitched
-            # Encode back panel separately at full resolution for targeted second-pass lookups
-            back_b64 = await loop.run_in_executor(None, _encode_image, back_image_path)
-        else:
-            effective_path = image_path
-
-        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-            image_b64 = await loop.run_in_executor(None, _encode_image, effective_path)
-            raw = await _call_ollama(client, image_b64, _FULL_PROMPT)
-            data = _postprocess(_parse_json(raw))
-            # Back panel often carries sulfite statements and regulatory text.
-            # Encode at higher resolution for the dedicated sulfite scan — small-print
-            # declarations are frequently missed at the default 768px.
-            if back_image_path and back_image_path.exists():
-                sulfite_b64 = await loop.run_in_executor(None, _encode_image, back_image_path, 1024, True)
-            else:
-                sulfite_b64 = image_b64
-            if not data.get("contains_sulfites"):
-                data["contains_sulfites"] = await _extract_sulfites(client, sulfite_b64)
-            if not data.get("brand_name"):
-                data["brand_name"] = await _extract_brand_name(client, image_b64)
-            # Always re-extract class_type from the front panel using the dedicated prompt.
-            # The full prompt runs on the stitched image where each panel is half-width; the
-            # dedicated function on the front panel alone is more reliable and applies equally
-            # to every label regardless of what the full prompt returned.
-            front_b64 = await loop.run_in_executor(None, _encode_image, image_path, 1024)
-            class_from_front = await _extract_class_type(client, front_b64)
-            if class_from_front:
-                data["class_type"] = class_from_front
-            # If net_contents not found in main pass, try a targeted second-pass lookup
-            if not data.get("net_contents"):
-                net_b64 = back_b64 or image_b64
-                data["net_contents"] = await _extract_net_contents(client, net_b64)
-            return LabelFields(**data)
-    finally:
-        if stitched:
-            stitched.unlink(missing_ok=True)
-
-
-async def _extract_brand_name(client: httpx.AsyncClient, image_b64: str) -> Optional[str]:
-    resp = await client.post(
-        f"{OLLAMA_BASE_URL}/api/chat",
-        json={
-            "model": MODEL,
-            "messages": [{"role": "user",
-                "content": (
-                    "Look at this alcohol beverage label image. "
-                    "What is the PRODUCT NAME or LABEL NAME of this specific beverage? "
-                    "Examples: 'ABC Single Barrel', 'Honey Huckleberry Pie', '12345 Imports'. "
-                    "IMPORTANT: if you see text like 'DISTILLED BY XYZ Distillery' or "
-                    "'BREWED & BOTTLED BY XYZ Brewery', that is the PRODUCER name — do NOT "
-                    "return it. Return the product/label name only, or 'none' if you truly "
-                    "cannot identify one."
-                ),
-                "images": [image_b64]}],
-            "stream": False,
-            "keep_alive": -1,
-            "options": {"temperature": 0.1},
-        },
-    )
-    resp.raise_for_status()
-    result = resp.json()["message"]["content"].strip().split("\n")[0].strip()
-    if result.lower() in _NULL_SENTINELS or result.lower() in ("no", "not found", "not present", "cannot determine"):
-        return None
-    return result or None
-
-
-async def _extract_class_type(client: httpx.AsyncClient, image_b64: str) -> Optional[str]:
-    resp = await client.post(
-        f"{OLLAMA_BASE_URL}/api/chat",
-        json={
-            "model": MODEL,
-            "messages": [{"role": "user",
-                "content": (
-                    "Look at this alcohol beverage label. "
-                    "Classify this product as EXACTLY one of three categories: "
-                    "'Wine', 'Malt Beverage', or 'Distilled Spirits'. "
-                    "Wine = grape or fruit wine, champagne, prosecco, cider, mead. "
-                    "Malt Beverage = beer, ale, lager, stout, porter, IPA, hard seltzer, or any malt-based drink. "
-                    "Distilled Spirits = whiskey, bourbon, rye, rum, vodka, gin, tequila, brandy, cognac, liqueur, or any distilled spirit. "
-                    "IMPORTANT: If the label shows the word 'VODKA', 'GIN', 'RUM', 'WHISKEY', 'TEQUILA', or any other distilled spirit name — "
-                    "classify as 'Distilled Spirits' even if the product is a flavored cocktail, mixed drink, or comes in a can or pouch. "
-                    "Only classify as 'Malt Beverage' if the label explicitly says beer, ale, lager, brewed, or malt-based with NO distilled spirit name present. "
-                    "Reply with ONLY the category name, nothing else."
-                ),
-                "images": [image_b64]}],
-            "stream": False,
-            "keep_alive": -1,
-            "options": {"temperature": 0.1},
-        },
-    )
-    resp.raise_for_status()
-    result = resp.json()["message"]["content"].strip().split("\n")[0].strip()
-    if result.lower() in _NULL_SENTINELS:
-        return None
-    return _normalize_class_type(result) or result or None
-
-
-async def _extract_sulfites(client: httpx.AsyncClient, image_b64: str) -> Optional[str]:
-    resp = await client.post(
-        f"{OLLAMA_BASE_URL}/api/chat",
-        json={
-            "model": MODEL,
-            "messages": [{"role": "user",
-                "content": (
-                    'Look at this alcohol label image carefully. '
-                    'Search every panel for any text about sulfites — including BOTH '
-                    'positive statements like "CONTAINS SULFITES", "Contains Sulfating Agents" '
-                    'AND negative statements like "SULFITE FREE", "NO SULFITES ADDED", '
-                    '"Contains No Detectable Sulfites". '
-                    'Reply with just that exact text if you find it, or reply with '
-                    'the single word "none" if no sulfite statement is present.'
-                ),
-                "images": [image_b64]}],
-            "stream": False,
-            "keep_alive": -1,
-            "options": {"temperature": 0.1},
-        },
-    )
-    resp.raise_for_status()
-    result = resp.json()["message"]["content"].strip()
-    if result.lower() in _NULL_SENTINELS or result.lower() in ("no", "not found", "not present", "absent"):
-        return None
-    return result
-
-
-async def _extract_importer(client: httpx.AsyncClient, image_b64: str) -> Optional[str]:
-    resp = await client.post(
-        f"{OLLAMA_BASE_URL}/api/chat",
-        json={
-            "model": MODEL,
-            "messages": [{"role": "user",
-                "content": (
-                    "Look at this alcohol beverage label. "
-                    "Find any US IMPORTER, BOTTLER, or DISTRIBUTOR — a company located inside the United States. "
-                    "IGNORE all foreign producers, wineries, distilleries, and any company outside the US. "
-                    "A valid US entry has a company name AND a US city AND a 2-letter state abbreviation "
-                    "(e.g. ', NY', ', CA', ', FL', ', OR', ', TX'). "
-                    "Look for key phrases: 'IMPORTED BY:', 'SOLE IMPORTER:', 'IMPORTED AND BOTTLED BY:', "
-                    "'BOTTLED BY:', 'DISTRIBUTED BY:', or a US company address printed in small text. "
-                    "Return the complete entry exactly as printed on the label. "
-                    "If no US importer or bottler is present, reply with exactly: none"
-                ),
-                "images": [image_b64]}],
-            "stream": False,
-            "keep_alive": -1,
-            "options": {"temperature": 0.1},
-        },
-    )
-    resp.raise_for_status()
-    result = resp.json()["message"]["content"].strip().split("\n")[0].strip()
-    is_null = result.lower() in _NULL_SENTINELS or result.lower() in ("no", "not found", "not present", "not listed")
-    if is_null:
-        logger.warning("_extract_importer raw=%r accepted=None (null sentinel)", result)
-        return None
-    # Accept if it has a US address tail (city, STATE) OR a US corporate identifier
-    # (LLC, Inc., L.L.C., etc.) — some importers are printed without a full address.
-    has_us_address = bool(_US_ADDRESS_TAIL_RE.search(result))
-    has_us_corp = bool(_US_COMPANY_RE.search(result))
-    accepted = has_us_address or has_us_corp
-    logger.warning("_extract_importer raw=%r us_address=%s us_corp=%s accepted=%s", result, has_us_address, has_us_corp, accepted)
-    return result if accepted else None
-
-
-async def _extract_net_contents(client: httpx.AsyncClient, image_b64: str) -> Optional[str]:
-    resp = await client.post(
-        f"{OLLAMA_BASE_URL}/api/chat",
-        json={
-            "model": MODEL,
-            "messages": [{"role": "user",
-                "content": (
-                    "Look at this alcohol beverage label. "
-                    "Find the NET CONTENTS — the TOTAL volume of liquid in the container "
-                    "(e.g. '100 mL', '750 mL', '1.75 L'). "
-                    "Look near the barcode, bottom edge, or nutrition facts panel. "
-                    "Return only the volume with units. "
-                    "If not found, reply with exactly: none"
-                ),
-                "images": [image_b64]}],
-            "stream": False,
-            "keep_alive": -1,
-            "options": {"temperature": 0.1},
-        },
-    )
-    resp.raise_for_status()
-    result = resp.json()["message"]["content"].strip().split("\n")[0].strip()
-    if result.lower() in _NULL_SENTINELS or result.lower() in ("no", "not found", "not present"):
-        return None
-    if not re.search(r'\d+\.?\d*\s*(?:ml|l\b|fl\.?\s*oz)', result, re.IGNORECASE):
-        return None
-    return result
-
-
-async def _call_ollama(
-    client: httpx.AsyncClient, image_b64: str, prompt: str
-) -> str:
+async def _call_ollama(client: httpx.AsyncClient, image_b64: str, prompt: str) -> str:
     resp = await client.post(
         f"{OLLAMA_BASE_URL}/api/chat",
         json={
@@ -348,110 +263,6 @@ def _parse_json(raw: str) -> dict:
     if match:
         raw = match.group(0)
     return json.loads(raw)
-
-
-_FIELD_NAMES = {
-    "brand_name", "class_type", "alcohol_content", "net_contents",
-    "producer_name_address", "us_importer", "country_of_origin", "government_warning", "contains_sulfites",
-}
-
-_SINGLE_LINE_FIELDS = {"brand_name", "class_type", "alcohol_content", "net_contents", "country_of_origin", "contains_sulfites", "us_importer"}
-_NULL_SENTINELS = {"none", "null", "n/a", "na", "[none]", "unknown", "-"}
-_INVALID_COUNTRIES = {"american", "domestic", "imported", "local"}
-
-# Words that appear in beverage types — used to detect if class_type is actually a product name
-_BEVERAGE_TYPE_WORDS = frozenset({
-    "ale", "beer", "lager", "stout", "porter", "ipa",
-    "whisky", "whiskey", "bourbon", "rye", "scotch",
-    "wine", "champagne", "prosecco", "cider",
-    "rum", "vodka", "gin", "tequila", "mezcal", "brandy",
-    "mead", "liqueur", "spirits", "schnapps", "malt",
-    "saison", "pilsner", "bock", "seltzer",
-})
-
-# Keyword → canonical class_type category mapping
-_CLASS_TYPE_KEYWORDS = [
-    ("wine", "Wine"), ("champagne", "Wine"), ("prosecco", "Wine"),
-    ("mead", "Wine"), ("cider", "Wine"), ("vermouth", "Wine"),
-    ("ale", "Malt Beverage"), ("beer", "Malt Beverage"), ("lager", "Malt Beverage"),
-    ("stout", "Malt Beverage"), ("porter", "Malt Beverage"), ("ipa", "Malt Beverage"),
-    ("malt", "Malt Beverage"), ("saison", "Malt Beverage"), ("pilsner", "Malt Beverage"),
-    ("bock", "Malt Beverage"), ("seltzer", "Malt Beverage"),
-    ("whisky", "Distilled Spirits"), ("whiskey", "Distilled Spirits"),
-    ("bourbon", "Distilled Spirits"), ("scotch", "Distilled Spirits"),
-    ("rum", "Distilled Spirits"), ("vodka", "Distilled Spirits"),
-    ("gin", "Distilled Spirits"), ("tequila", "Distilled Spirits"),
-    ("mezcal", "Distilled Spirits"), ("brandy", "Distilled Spirits"),
-    ("cognac", "Distilled Spirits"), ("liqueur", "Distilled Spirits"),
-    ("schnapps", "Distilled Spirits"), ("spirit", "Distilled Spirits"),
-]
-
-# Company-type words that identify a producer entity, not a product
-_COMPANY_TYPE_RE = re.compile(
-    r'\b(distillery|brewery|winery|vineyard|estate)\b', re.IGNORECASE
-)
-
-# Phrases that precede the origin country on the label
-_ORIGIN_PREFIX_RE = re.compile(
-    r'^(?:produced?\s+in|product\s+of|made\s+in|imported?\s+from)\s+',
-    re.IGNORECASE,
-)
-
-# Matches a US address tail: ", STATE" or ", STATE ZIPCODE"
-# Accepts both 2-letter abbreviations (NY, CA) and full state names (New York, California).
-# Full names prevent false negatives on labels that spell out the state.
-# Explicit name list prevents false positives on European 5-digit postal codes.
-_US_ADDRESS_TAIL_RE = re.compile(
-    r',\s*(?:'
-    r'AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|'
-    r'NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY|DC|'
-    r'Alabama|Alaska|Arizona|Arkansas|California|Colorado|Connecticut|Delaware|'
-    r'Florida|Georgia|Hawaii|Idaho|Illinois|Indiana|Iowa|Kansas|Kentucky|Louisiana|'
-    r'Maine|Maryland|Massachusetts|Michigan|Minnesota|Mississippi|Missouri|Montana|'
-    r'Nebraska|Nevada|New\s+Hampshire|New\s+Jersey|New\s+Mexico|New\s+York|'
-    r'North\s+Carolina|North\s+Dakota|Ohio|Oklahoma|Oregon|Pennsylvania|'
-    r'Rhode\s+Island|South\s+Carolina|South\s+Dakota|Tennessee|Texas|Utah|'
-    r'Vermont|Virginia|Washington|West\s+Virginia|Wisconsin|Wyoming|'
-    r'District\s+of\s+Columbia'
-    r')(?:\s+\d{5}(?:-\d{4})?)?\s*$',
-    re.IGNORECASE
-)
-
-# Strips a trailing country/country-code suffix before address matching
-_TRAILING_USA_RE = re.compile(r',?\s*U\.?S\.?A?\.?\s*$', re.IGNORECASE)
-# US corporate entity suffixes — accept importer results that name a US company
-# even when the label omits the city/state address
-_US_COMPANY_RE = re.compile(r'\b(?:LLC|L\.L\.C\.|Inc\.?|Corp\.?|Ltd\.?|Co\.)\b', re.IGNORECASE)
-# Normalizes dotted state abbreviations like N.Y. or D.C. to NY / DC
-_DOTTED_ABBREV_RE = re.compile(r'\b([A-Z])\.([A-Z])\.?\s*$')
-
-
-def _is_us_address(addr: str) -> bool:
-    """Return True if addr ends with a recognisable US location."""
-    if _US_ADDRESS_TAIL_RE.search(addr):
-        return True
-    # Handle dotted abbreviations: N.Y. → NY, D.C. → DC
-    norm = _DOTTED_ABBREV_RE.sub(r'\1\2', addr.strip())
-    if _US_ADDRESS_TAIL_RE.search(norm):
-        return True
-    # Handle trailing country suffix: "Tennessee, USA" → "Tennessee"
-    stripped = _TRAILING_USA_RE.sub('', addr.strip())
-    return bool(_US_ADDRESS_TAIL_RE.search(stripped))
-
-
-def _normalize_class_type(value: str) -> Optional[str]:
-    """Map any class_type string to one of the three canonical categories, or None if unrecognizable."""
-    v = value.strip().lower()
-    if v in ("wine",):
-        return "Wine"
-    if v in ("malt beverage", "malt beverages"):
-        return "Malt Beverage"
-    if v in ("distilled spirits", "distilled spirit"):
-        return "Distilled Spirits"
-    for keyword, category in _CLASS_TYPE_KEYWORDS:
-        if keyword in v:
-            return category
-    return None
 
 
 def _postprocess(data: dict) -> dict:
@@ -483,7 +294,7 @@ def _postprocess(data: dict) -> dict:
         if isinstance(val, str) and val.strip().lower().replace(" ", "_") in _FIELD_NAMES:
             data[key] = None
 
-    # Strip leading origin phrases from country_of_origin to get the bare country name
+    # Strip leading origin phrases from country_of_origin
     country = data.get("country_of_origin")
     if isinstance(country, str):
         stripped = _ORIGIN_PREFIX_RE.sub("", country.strip()).strip()
@@ -511,7 +322,7 @@ def _postprocess(data: dict) -> dict:
             ):
                 data["country_of_origin"] = None
 
-    # Ensure government_warning includes the required prefix
+    # Ensure government_warning includes the required prefix if VLM returned it
     gw = data.get("government_warning")
     if gw and not gw.upper().lstrip().startswith("GOVERNMENT WARNING"):
         data["government_warning"] = "GOVERNMENT WARNING: " + gw.strip()
@@ -523,38 +334,59 @@ def _postprocess(data: dict) -> dict:
         if _COMPANY_TYPE_RE.search(data["brand_name"]) and bn_lower in prod_lower:
             data["brand_name"] = None
 
-    # If brand_name is null and class_type doesn't contain any standard beverage-type
-    # word, the model likely put the product name in the wrong field — swap them.
-    if not data.get("brand_name") and data.get("class_type"):
-        ct_lower = data["class_type"].lower()
-        if not any(word in ct_lower for word in _BEVERAGE_TYPE_WORDS):
-            data["brand_name"] = data["class_type"]
-            data["class_type"] = None
-
-    # Normalize class_type to one of three canonical categories; clear if unrecognizable
+    # Normalize class_type to one of three canonical categories
     ct = data.get("class_type")
     if isinstance(ct, str):
-        normalized = _normalize_class_type(ct)
-        data["class_type"] = normalized  # None if unrecognizable → triggers fallback call
-
-    # If the model extracted a dedicated US importer, it takes precedence over
-    # the foreign producer — merge into the single producer_name_address field.
-    us_importer = data.pop("us_importer", None)
-    if us_importer:
-        data["producer_name_address"] = us_importer
-
-    # Last-resort brand_name fallback for import labels
-    if not data.get("brand_name") and data.get("producer_name_address"):
-        producer = data["producer_name_address"]
-        stripped = re.sub(
-            r'^\s*(?:BOTTLED|IMPORTED|PRODUCED|DISTRIBUTED|BREWED|PACKED)\s+BY:?\s*',
-            '', producer, flags=re.IGNORECASE,
-        ).strip()
-        name_part = re.sub(r',?\s+[\w\s]{2,},\s+[A-Z]{2}\s*$', '', stripped).strip()
-        if (name_part
-                and name_part.lower() != producer.strip().lower()
-                and len(name_part) > 2
-                and not _COMPANY_TYPE_RE.search(name_part)):
-            data["brand_name"] = name_part
+        data["class_type"] = _normalize_class_type(ct)
 
     return data
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+async def extract_label_fields(
+    image_path: Path, back_image_path: Optional[Path] = None
+) -> LabelFields:
+    loop = asyncio.get_running_loop()
+
+    # Stage 1 — OCR both panels at full resolution
+    try:
+        front_text = await loop.run_in_executor(None, _ocr_image, image_path)
+        back_text = ""
+        if back_image_path and back_image_path.exists():
+            back_text = await loop.run_in_executor(None, _ocr_image, back_image_path)
+        combined_text = (front_text + "\n\n" + back_text).strip()
+    except Exception as e:
+        logger.warning("OCR failed, falling back to VLM-only: %s", e)
+        combined_text = ""
+
+    # Stage 2 — Rule-based extraction from OCR text
+    rule_data = _rule_extract(combined_text) if combined_text else {}
+
+    # Stage 3 — VLM for semantic fields (brand, class, producer, country)
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        front_b64 = await loop.run_in_executor(None, _encode_image, image_path, 1024)
+        ocr_context = combined_text[:3000] if combined_text else "(OCR unavailable — read from image)"
+        prompt = _SEMANTIC_PROMPT_TEMPLATE.format(ocr_text=ocr_context)
+        raw = await _call_ollama(client, front_b64, prompt)
+        vlm_data = _postprocess(_parse_json(raw))
+
+    # Merge: Stage 2 (rules) takes precedence for structured fields;
+    # Stage 3 (VLM) fills semantic fields rules cannot handle.
+    merged: dict = {
+        # Semantic fields — VLM only
+        "brand_name": vlm_data.get("brand_name"),
+        "producer_name_address": vlm_data.get("producer_name_address"),
+        "country_of_origin": vlm_data.get("country_of_origin"),
+        # class_type — VLM preferred; keyword match as fallback
+        "class_type": vlm_data.get("class_type") or rule_data.get("class_type"),
+        # Structured fields — rules take precedence; VLM as fallback
+        "alcohol_content": rule_data.get("alcohol_content") or vlm_data.get("alcohol_content"),
+        "net_contents": rule_data.get("net_contents") or vlm_data.get("net_contents"),
+        "government_warning": rule_data.get("government_warning") or vlm_data.get("government_warning"),
+        "contains_sulfites": rule_data.get("contains_sulfites") or vlm_data.get("contains_sulfites"),
+    }
+
+    return LabelFields(**merged)
