@@ -198,6 +198,13 @@ async def extract_label_fields(
                 debug_info["after_postprocess"] = dict(data)
                 debug_info["secondary"] = {}
 
+            # Kick off the OCR pass now — it only needs the image paths, so it can run
+            # concurrently with all the VLM secondary passes below. Awaited just before
+            # the final return so its result is ready when needed.
+            gw_ocr_future = loop.run_in_executor(
+                None, _detect_government_warning_ocr, image_path, back_image_path
+            )
+
             # Back panel often carries sulfite statements and regulatory text.
             # Encode at higher resolution for the dedicated sulfite scan — small-print
             # declarations are frequently missed at the default 768px.
@@ -267,9 +274,8 @@ async def extract_label_fields(
             # OCR-based government_warning: exact uppercase check overrides VLM output.
             # Prevents both false positives (model normalises lowercase text to uppercase)
             # and false negatives (model misses small-print text the OCR can still read).
-            gw_ocr = await loop.run_in_executor(
-                None, _detect_government_warning_ocr, image_path, back_image_path
-            )
+            # Dispatched after _postprocess and overlapped with the VLM secondary passes.
+            gw_ocr = await gw_ocr_future
             data["government_warning"] = gw_ocr
             if debug_info is not None:
                 debug_info["secondary"]["government_warning"] = {"raw": gw_ocr, "accepted": gw_ocr}
