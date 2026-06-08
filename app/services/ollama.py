@@ -6,6 +6,7 @@ import re
 import base64
 import json
 import tempfile
+import threading
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
@@ -15,7 +16,28 @@ from PIL import Image, ImageEnhance, ImageOps
 
 # Shared pool for OCR strategies — pytesseract calls a subprocess, so it releases
 # the GIL; threading parallelises wall-time on multi-strategy cascades.
-_OCR_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="gw-ocr-")
+_OCR_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="gw-ocr-")
+
+# Process-wide bound on concurrent tesseract subprocesses. Each call spawns a
+# subprocess that loads tesseract + leptonica; too many in flight at once causes
+# segfaults inside libleptonica (we hit this with 5+ concurrent processes on
+# upscaled images). Two is enough for parallelism without resource pressure.
+_TESSERACT_SEM = threading.Semaphore(2)
+
+
+def _safe_image_to_string(img, config: str = "") -> str:
+    """All pytesseract.image_to_string calls go through here so the semaphore
+    bounds total concurrent tesseract subprocesses regardless of caller."""
+    import pytesseract
+    with _TESSERACT_SEM:
+        return pytesseract.image_to_string(img, config=config)
+
+
+def _safe_image_to_osd(img) -> dict:
+    """All pytesseract.image_to_osd calls go through here."""
+    import pytesseract
+    with _TESSERACT_SEM:
+        return pytesseract.image_to_osd(img, output_type=pytesseract.Output.DICT)
 
 from app.models.label import LabelFields
 
@@ -78,8 +100,7 @@ def _auto_orient(img: Image.Image, back_panel: bool = False) -> Image.Image:
     """
     img = ImageOps.exif_transpose(img)
     try:
-        import pytesseract
-        osd = pytesseract.image_to_osd(img, output_type=pytesseract.Output.DICT)
+        osd = _safe_image_to_osd(img)
         rotate = int(osd.get("rotate", 0))
         if back_panel and rotate in (90, 180, 270):
             img = img.rotate(rotate, expand=True)
@@ -727,9 +748,7 @@ def _ocr_text_mentions_sulfite(text: str) -> bool:
 
 def _ocr_finds_warning(img, config: str = "") -> bool:
     """Single OCR call — True if exact uppercase 'GOVERNMENT WARNING' appears in result."""
-    import pytesseract
-    text = pytesseract.image_to_string(img, config=config)
-    return bool(_GOVT_WARNING_RE.search(text))
+    return bool(_GOVT_WARNING_RE.search(_safe_image_to_string(img, config=config)))
 
 
 def _label_mentions_sulfite_ocr(image_path: Path, back_image_path: Optional[Path]) -> bool:
@@ -742,13 +761,12 @@ def _label_mentions_sulfite_ocr(image_path: Path, back_image_path: Optional[Path
     the VLM into outputting 'CONTAINS SULFITES').
     """
     try:
-        import pytesseract
         for path in filter(None, [image_path, back_image_path]):
             if not path.exists():
                 continue
             img = ImageOps.exif_transpose(Image.open(path)).convert("L")
             for variant in (img, img.resize((img.width * 2, img.height * 2), Image.LANCZOS)):
-                if _ocr_text_mentions_sulfite(pytesseract.image_to_string(variant)):
+                if _ocr_text_mentions_sulfite(_safe_image_to_string(variant)):
                     return True
         return False
     except Exception:
