@@ -10,7 +10,7 @@ import unicodedata
 from typing import Optional
 import httpx
 from pathlib import Path
-from PIL import Image, ImageEnhance
+from PIL import Image, ImageEnhance, ImageOps
 
 from app.models.label import LabelFields
 
@@ -64,13 +64,51 @@ Example output for an imported cognac label:
 }"""
 
 
+def _auto_orient(img: Image.Image) -> Image.Image:
+    """Correct image orientation: EXIF metadata first, pytesseract OSD for physical rotation."""
+    img = ImageOps.exif_transpose(img)
+    try:
+        import pytesseract
+        osd = pytesseract.image_to_osd(img, output_type=pytesseract.Output.DICT)
+        angle = int(osd.get("rotate", 0))
+        if angle != 0:
+            img = img.rotate(angle, expand=True)
+    except Exception:
+        pass  # tesseract unavailable or insufficient text for OSD — proceed as-is
+    return img
+
+
+def _crop_to_content(img: Image.Image, padding: int = 20) -> Image.Image:
+    """Crop away white/near-white scanner margins so content fills the resolution budget."""
+    gray = img.convert("L")
+    # Pixels darker than 245 are label content; 245+ is scanner white/near-white background
+    content_mask = gray.point(lambda p: 255 if p < 245 else 0)
+    bbox = content_mask.getbbox()
+    if bbox is None:
+        return img
+    x0, y0, x1, y1 = bbox
+    w, h = img.size
+    x0 = max(0, x0 - padding)
+    y0 = max(0, y0 - padding)
+    x1 = min(w, x1 + padding)
+    y1 = min(h, y1 + padding)
+    # Skip if less than 5% of the image would be removed (not worth the crop)
+    if (x1 - x0) * (y1 - y0) > 0.95 * w * h:
+        return img
+    return img.crop((x0, y0, x1, y1))
+
+
 def _encode_image(image_path: Path, max_side: int = _MAX_SIDE, enhance: bool = False) -> str:
     with Image.open(image_path) as img:
         if img.mode in ("RGBA", "LA", "P"):
             img = img.convert("RGB")
+        img = _auto_orient(img)
+        img = _crop_to_content(img)
         if enhance:
             img = ImageEnhance.Contrast(img).enhance(1.8)
             img = ImageEnhance.Sharpness(img).enhance(1.5)
+        else:
+            img = ImageEnhance.Contrast(img).enhance(1.15)  # light baseline for primary pass
         w, h = img.size
         if max(w, h) > max_side:
             scale = max_side / max(w, h)
@@ -83,8 +121,8 @@ def _encode_image(image_path: Path, max_side: int = _MAX_SIDE, enhance: bool = F
 def _stitch_images(front_path: Path, back_path: Path) -> Path:
     """Stitch front (left) and back (right) label images side by side at matching height."""
     with Image.open(front_path) as front_img, Image.open(back_path) as back_img:
-        front_rgb = front_img.convert("RGB")
-        back_rgb = back_img.convert("RGB")
+        front_rgb = _auto_orient(front_img.convert("RGB"))
+        back_rgb = _auto_orient(back_img.convert("RGB"))
 
         target_h = max(front_rgb.height, back_rgb.height)
         fw = int(front_rgb.width * target_h / front_rgb.height)
