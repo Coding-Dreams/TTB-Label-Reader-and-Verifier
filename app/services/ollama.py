@@ -121,7 +121,9 @@ async def _warmup_model() -> None:
 
 
 async def extract_label_fields(
-    image_path: Path, back_image_path: Optional[Path] = None
+    image_path: Path,
+    back_image_path: Optional[Path] = None,
+    debug_info: Optional[dict] = None,
 ) -> LabelFields:
     stitched: Optional[Path] = None
     loop = asyncio.get_running_loop()
@@ -140,7 +142,17 @@ async def extract_label_fields(
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
             image_b64 = await loop.run_in_executor(None, _encode_image, effective_path)
             raw = await _call_ollama(client, image_b64, _FULL_PROMPT)
-            data = _postprocess(_parse_json(raw))
+
+            parsed = _parse_json(raw)
+            if debug_info is not None:
+                debug_info["main_raw_json"] = raw
+                debug_info["after_parse"] = dict(parsed)
+
+            data = _postprocess(parsed)
+            if debug_info is not None:
+                debug_info["after_postprocess"] = dict(data)
+                debug_info["secondary"] = {}
+
             # Back panel often carries sulfite statements and regulatory text.
             # Encode at higher resolution for the dedicated sulfite scan — small-print
             # declarations are frequently missed at the default 768px.
@@ -149,28 +161,49 @@ async def extract_label_fields(
             else:
                 sulfite_b64 = image_b64
             if not data.get("contains_sulfites"):
-                data["contains_sulfites"] = await _extract_sulfites(client, sulfite_b64)
+                sink: Optional[dict] = {} if debug_info is not None else None
+                result = await _extract_sulfites(client, sulfite_b64, _debug_sink=sink)
+                if debug_info is not None:
+                    debug_info["secondary"]["sulfites"] = {"raw": sink.get("raw"), "accepted": result}
+                data["contains_sulfites"] = result
+
             if not data.get("brand_name"):
-                data["brand_name"] = await _extract_brand_name(client, image_b64)
+                sink = {} if debug_info is not None else None
+                result = await _extract_brand_name(client, image_b64, _debug_sink=sink)
+                if debug_info is not None:
+                    debug_info["secondary"]["brand_name"] = {"raw": sink.get("raw"), "accepted": result}
+                data["brand_name"] = result
+
             # Always re-extract class_type from the front panel using the dedicated prompt.
             # The full prompt runs on the stitched image where each panel is half-width; the
             # dedicated function on the front panel alone is more reliable and applies equally
             # to every label regardless of what the full prompt returned.
             front_b64 = await loop.run_in_executor(None, _encode_image, image_path, 1024)
-            class_from_front = await _extract_class_type(client, front_b64)
+            sink = {} if debug_info is not None else None
+            class_from_front = await _extract_class_type(client, front_b64, _debug_sink=sink)
+            if debug_info is not None:
+                debug_info["secondary"]["class_type"] = {"raw": sink.get("raw"), "accepted": class_from_front}
             if class_from_front:
                 data["class_type"] = class_from_front
+
             # If net_contents not found in main pass, try a targeted second-pass lookup
             if not data.get("net_contents"):
                 net_b64 = back_b64 or image_b64
-                data["net_contents"] = await _extract_net_contents(client, net_b64)
+                sink = {} if debug_info is not None else None
+                result = await _extract_net_contents(client, net_b64, _debug_sink=sink)
+                if debug_info is not None:
+                    debug_info["secondary"]["net_contents"] = {"raw": sink.get("raw"), "accepted": result}
+                data["net_contents"] = result
+
             return LabelFields(**data)
     finally:
         if stitched:
             stitched.unlink(missing_ok=True)
 
 
-async def _extract_brand_name(client: httpx.AsyncClient, image_b64: str) -> Optional[str]:
+async def _extract_brand_name(
+    client: httpx.AsyncClient, image_b64: str, _debug_sink: Optional[dict] = None
+) -> Optional[str]:
     resp = await client.post(
         f"{OLLAMA_BASE_URL}/api/chat",
         json={
@@ -193,12 +226,16 @@ async def _extract_brand_name(client: httpx.AsyncClient, image_b64: str) -> Opti
     )
     resp.raise_for_status()
     result = resp.json()["message"]["content"].strip().split("\n")[0].strip()
+    if _debug_sink is not None:
+        _debug_sink["raw"] = result
     if result.lower() in _NULL_SENTINELS or result.lower() in ("no", "not found", "not present", "cannot determine"):
         return None
     return result or None
 
 
-async def _extract_class_type(client: httpx.AsyncClient, image_b64: str) -> Optional[str]:
+async def _extract_class_type(
+    client: httpx.AsyncClient, image_b64: str, _debug_sink: Optional[dict] = None
+) -> Optional[str]:
     resp = await client.post(
         f"{OLLAMA_BASE_URL}/api/chat",
         json={
@@ -224,12 +261,16 @@ async def _extract_class_type(client: httpx.AsyncClient, image_b64: str) -> Opti
     )
     resp.raise_for_status()
     result = resp.json()["message"]["content"].strip().split("\n")[0].strip()
+    if _debug_sink is not None:
+        _debug_sink["raw"] = result
     if result.lower() in _NULL_SENTINELS:
         return None
     return _normalize_class_type(result) or result or None
 
 
-async def _extract_sulfites(client: httpx.AsyncClient, image_b64: str) -> Optional[str]:
+async def _extract_sulfites(
+    client: httpx.AsyncClient, image_b64: str, _debug_sink: Optional[dict] = None
+) -> Optional[str]:
     resp = await client.post(
         f"{OLLAMA_BASE_URL}/api/chat",
         json={
@@ -252,6 +293,8 @@ async def _extract_sulfites(client: httpx.AsyncClient, image_b64: str) -> Option
     )
     resp.raise_for_status()
     result = resp.json()["message"]["content"].strip()
+    if _debug_sink is not None:
+        _debug_sink["raw"] = result
     if result.lower() in _NULL_SENTINELS or result.lower() in ("no", "not found", "not present", "absent"):
         return None
     return result
@@ -295,7 +338,9 @@ async def _extract_importer(client: httpx.AsyncClient, image_b64: str) -> Option
     return result if accepted else None
 
 
-async def _extract_net_contents(client: httpx.AsyncClient, image_b64: str) -> Optional[str]:
+async def _extract_net_contents(
+    client: httpx.AsyncClient, image_b64: str, _debug_sink: Optional[dict] = None
+) -> Optional[str]:
     resp = await client.post(
         f"{OLLAMA_BASE_URL}/api/chat",
         json={
@@ -317,6 +362,8 @@ async def _extract_net_contents(client: httpx.AsyncClient, image_b64: str) -> Op
     )
     resp.raise_for_status()
     result = resp.json()["message"]["content"].strip().split("\n")[0].strip()
+    if _debug_sink is not None:
+        _debug_sink["raw"] = result
     if result.lower() in _NULL_SENTINELS or result.lower() in ("no", "not found", "not present"):
         return None
     if not re.search(r'\d+\.?\d*\s*(?:ml|l\b|fl\.?\s*oz)', result, re.IGNORECASE):

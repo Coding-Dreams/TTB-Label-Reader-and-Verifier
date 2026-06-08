@@ -74,14 +74,70 @@ def _load_truth(folder: Path) -> dict:
         return json.load(f)
 
 
-def _extract(front: Path, back: Optional[Path] = None, timeout: int = 60) -> httpx.Response:
+def _extract(front: Path, back: Optional[Path] = None, timeout: int = 60, verbose: bool = False) -> httpx.Response:
+    params = {"verbose": "true"} if verbose else {}
     with contextlib.ExitStack() as stack:
         fh = stack.enter_context(open(front, "rb"))
         files = [("image", (front.name, fh))]
         if back:
             bh = stack.enter_context(open(back, "rb"))
             files.append(("back_image", (back.name, bh)))
-        return httpx.post(f"{API_BASE}/extract", files=files, timeout=timeout)
+        return httpx.post(f"{API_BASE}/extract", files=files, params=params, timeout=timeout)
+
+
+_TRACE_FIELDS = [
+    "brand_name", "class_type", "alcohol_content", "net_contents",
+    "producer_name_address", "us_importer", "country_of_origin", "contains_sulfites",
+]
+
+
+def _fmt(v) -> str:
+    s = repr(v)
+    return (s[:78] + "…'") if len(s) > 80 else s
+
+
+def _print_pipeline_trace(folder_name: str, data: dict) -> None:
+    debug = data.get("_debug", {})
+
+    try:
+        main_raw = json.loads(debug.get("main_raw_json", "{}"))
+    except (json.JSONDecodeError, TypeError):
+        main_raw = {}
+
+    after_parse = debug.get("after_parse", {})
+    after_postprocess = debug.get("after_postprocess", {})
+    secondary = debug.get("secondary", {})
+
+    sep = "─" * 72
+    print(f"\n{sep}")
+    print(f"  {folder_name}  ·  PIPELINE TRACE")
+    print(sep)
+
+    print("\n── [1] Main model output ──")
+    for f in _TRACE_FIELDS:
+        print(f"  {f:<28} {_fmt(main_raw.get(f))}")
+
+    changed = [
+        f for f in _TRACE_FIELDS
+        if after_postprocess.get(f) != main_raw.get(f)
+    ]
+    if changed:
+        print("\n── [2] After postprocess (changed fields) ──")
+        for f in changed:
+            print(f"  {f:<28} {_fmt(after_postprocess.get(f))}  ←  was {_fmt(main_raw.get(f))}")
+    else:
+        print("\n── [2] After postprocess — no changes ──")
+
+    if secondary:
+        print("\n── [3] Secondary passes ──")
+        for name, info in secondary.items():
+            print(f"  {name:<28} raw={_fmt(info.get('raw'))}  →  accepted={_fmt(info.get('accepted'))}")
+
+    print("\n── [4] Final extracted fields ──")
+    for f in _TRACE_FIELDS:
+        if f != "us_importer":
+            print(f"  {f:<28} {_fmt(data.get(f))}")
+    print()
 
 
 def _verify(
@@ -141,7 +197,7 @@ _LABEL_FOLDERS = (
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("folder", _LABEL_FOLDERS, ids=[f.name for f in _LABEL_FOLDERS])
-def test_extract_fields(api, folder):
+def test_extract_fields(api, folder, show_ocr):
     front, back = _get_label_images(folder)
     if not front:
         pytest.skip(f"No image found in {folder.name}")
@@ -150,9 +206,12 @@ def test_extract_fields(api, folder):
     if not truth:
         pytest.skip(f"No truth JSON in {folder.name}")
 
-    resp = _extract(front, back)
+    resp = _extract(front, back, verbose=show_ocr)
     assert resp.status_code == 200, f"Extract failed: {resp.text}"
     data = resp.json()
+
+    if show_ocr:
+        _print_pipeline_trace(folder.name, data)
 
     failures = []
     for field, threshold in _FIELD_THRESHOLDS.items():
