@@ -674,10 +674,41 @@ _URL_SUFFIX_RE = re.compile(r'\s+(?:www|http)\.\S+.*$', re.IGNORECASE)
 _DOTTED_ABBREV_RE = re.compile(r'\b([A-Z])\.([A-Z])\.?\s*$')
 # Detects "GOVERNMENT WARNING" with possible line-break between the two words
 _GOVT_WARNING_RE = re.compile(r'GOVERNMENT\s+WARNING')
-# Matches 'sulfite' (American), 'sulphite' (British), and common OCR misreads where
-# the trailing 'e' gets garbled (e.g. tesseract reading 'Sulfities' on COLA1).
-# Requiring just 'sulfit'/'sulphit' is still distinctive — no English word collides.
+# Strict-spelling match — fast happy path for clean OCR output.
 _SULFITE_MENTION_RE = re.compile(r'\bsul(?:f|ph)it', re.IGNORECASE)
+# Candidate-word match: any token starting with 'sul' becomes a candidate for
+# fuzzy comparison against the canonical spellings.
+_SUL_CANDIDATE_RE = re.compile(r'\bsul\w{2,8}', re.IGNORECASE)
+_SULFITE_TARGETS = ("sulfite", "sulphite", "sulfites", "sulphites")
+# Other 'sul…' chemistry / pharmacy words that score high against 'sulfite'
+# by edit distance but are NOT sulfites. Explicit exclusion is more reliable
+# than tuning the fuzz threshold (sulfide vs sulflte both score 86).
+_SULFITE_LOOKALIKES = frozenset({
+    "sulfide", "sulfides", "sulphide", "sulphides",
+    "sulfate", "sulfates", "sulphate", "sulphates",
+    "sulfur", "sulphur", "sulfa",
+})
+
+
+def _ocr_text_mentions_sulfite(text: str) -> bool:
+    """Robust sulfite detection — strict regex first, then fuzzy on 'sul...' tokens.
+
+    Tesseract often garbles small printed text — 'Sulfities' (extra i),
+    'Sulf1tes' (1 for i), 'Sulflte' (l for i), or missing/duplicate letters.
+    For candidates starting with 'sul' that aren't in the explicit lookalike
+    set, fuzz.ratio against canonical spellings catches misreads with 1-2
+    character errors while rejecting unrelated 'sul…' words.
+    """
+    if _SULFITE_MENTION_RE.search(text):
+        return True
+    from thefuzz import fuzz
+    for m in _SUL_CANDIDATE_RE.finditer(text):
+        candidate = m.group(0).lower()
+        if candidate in _SULFITE_LOOKALIKES:
+            continue
+        if any(fuzz.ratio(candidate, target) >= 80 for target in _SULFITE_TARGETS):
+            return True
+    return False
 
 
 def _ocr_finds_warning(img, config: str = "") -> bool:
@@ -703,7 +734,7 @@ def _label_mentions_sulfite_ocr(image_path: Path, back_image_path: Optional[Path
                 continue
             img = ImageOps.exif_transpose(Image.open(path)).convert("L")
             for variant in (img, img.resize((img.width * 2, img.height * 2), Image.LANCZOS)):
-                if _SULFITE_MENTION_RE.search(pytesseract.image_to_string(variant)):
+                if _ocr_text_mentions_sulfite(pytesseract.image_to_string(variant)):
                     return True
         return False
     except Exception:
