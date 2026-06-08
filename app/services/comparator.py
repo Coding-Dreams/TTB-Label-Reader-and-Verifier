@@ -10,10 +10,16 @@ _REQUIRED_WARNING = "GOVERNMENT WARNING"
 _SULFITE_ABSENT_RE = re.compile(
     r'\b(free|no\b|none|without|not\s+detected|undetectable)\b', re.IGNORECASE
 )
+# Accept both American ('sulfite') and British ('sulphite') spellings
+_SULFITE_TOKEN_RE = re.compile(r'\bsul(?:f|ph)ite', re.IGNORECASE)
 
 
 def _sulfite_absent(text: str) -> bool:
     return bool(_SULFITE_ABSENT_RE.search(text))
+
+
+def _mentions_sulfite(text: str) -> bool:
+    return bool(_SULFITE_TOKEN_RE.search(text))
 
 
 def check_government_warning(
@@ -196,7 +202,7 @@ def check_sulfites(extracted: Optional[str], submitted: Optional[str]) -> FieldR
             extracted_value=None,
             submitted_value=submitted,
         )
-    if "sulfite" not in submitted.lower():
+    if not _mentions_sulfite(submitted):
         return FieldResult(
             field="contains_sulfites",
             status=FieldStatus.FAIL,

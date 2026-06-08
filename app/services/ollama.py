@@ -49,7 +49,7 @@ Rules:
 - class_type: EXACTLY one of three values — "Wine", "Malt Beverage", or "Distilled Spirits". Wine = grape/fruit wines, champagne, prosecco, cider. Malt Beverage = beer, ale, lager, stout, porter, IPA, hard seltzer. Distilled Spirits = whiskey, bourbon, rum, vodka, gin, tequila, brandy, liqueur, and similar spirits. IMPORTANT: if the label shows any distilled spirit name (VODKA, GIN, RUM, WHISKEY, TEQUILA, etc.) classify as "Distilled Spirits" even if it is a flavored or canned cocktail — only use "Malt Beverage" if no distilled spirit name is present
 - alcohol_content: the ABV percentage as printed (e.g. "45% ALC/VOL", "13% BY VOL")
 - net_contents: the TOTAL container size (e.g. "750 ML", "100 mL", "1 PINT") — the full bottle/can volume, NOT the alcohol-per-serving amount
-- contains_sulfites: search ALL panels for any sulfite statement — this includes BOTH positive declarations (e.g. "CONTAINS SULFITES", "Contains Sulfating Agents") AND negative declarations (e.g. "SULFITE FREE", "NO SULFITES ADDED", "Contains No Detectable Sulfites"); return the exact text if found, null if absent
+- contains_sulfites: search ALL panels for any sulfite statement, accepting both American ('sulfite') and British ('sulphite') spellings. This includes BOTH positive declarations (e.g. "CONTAINS SULFITES", "Contains Sulphites", "Contains Sulfating Agents") AND negative declarations (e.g. "SULFITE FREE", "NO SULFITES ADDED", "Contains No Detectable Sulphites"); return the exact text if found, null if absent
 - producer_name_address: the winery, distillery, brewery, or bottler that made or bottled this product, with their address. For DOMESTIC US products this is the US producer/bottler (e.g. "BIG EASY BLENDS LLC, KENNER, LA"). For IMPORTED products put only the FOREIGN producer here (e.g. "CHATEAU DUPONT, BORDEAUX, FRANCE") — do NOT put the US importer here, use us_importer for that
 - us_importer: for IMPORTED products only — the US IMPORTER, BOTTLER, or DISTRIBUTOR with a United States city and state; look for phrases like "IMPORTED BY:", "SOLE IMPORTER:", "IMPORTED AND BOTTLED BY:", "DISTRIBUTED BY:" followed by a US company name and address (e.g. "IMPORTED BY: ACME SPIRITS, MIAMI, FL"); null for domestic US products or if no US importer is listed
 - country_of_origin: the country name, but ONLY if explicitly stated as the product's origin (e.g. "Product of Canada", "Made in Germany", "Imported from France"). Do NOT infer from the beverage category or style name — "American Red Wine" does NOT mean country_of_origin is "United States"
@@ -386,10 +386,12 @@ async def _extract_sulfites(
             "messages": [{"role": "user",
                 "content": (
                     'Look at this alcohol label image carefully. '
-                    'Search every panel for any text about sulfites — including BOTH '
-                    'positive statements like "CONTAINS SULFITES", "Contains Sulfating Agents" '
-                    'AND negative statements like "SULFITE FREE", "NO SULFITES ADDED", '
-                    '"Contains No Detectable Sulfites". '
+                    'Search every panel for any sulfite statement, accepting BOTH '
+                    'American ("sulfite") and British ("sulphite") spellings. '
+                    'This includes positive statements like "CONTAINS SULFITES", '
+                    '"Contains Sulphites", "Contains Sulfating Agents", AND negative '
+                    'statements like "SULFITE FREE", "NO SULPHITES ADDED", '
+                    '"Contains No Detectable Sulphites". '
                     'Reply with just that exact text if you find it, or reply with '
                     'the single word "none" if no sulfite statement is present.'
                 ),
