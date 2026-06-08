@@ -7,10 +7,15 @@ import base64
 import json
 import tempfile
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 import httpx
 from pathlib import Path
 from PIL import Image, ImageEnhance, ImageOps
+
+# Shared pool for OCR strategies — pytesseract calls a subprocess, so it releases
+# the GIL; threading parallelises wall-time on multi-strategy cascades.
+_OCR_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="gw-ocr-")
 
 from app.models.label import LabelFields
 
@@ -607,15 +612,33 @@ def _ocr_finds_warning(img, config: str = "") -> bool:
     return bool(_GOVT_WARNING_RE.search(text))
 
 
+def _any_match_parallel(tasks: list) -> bool:
+    """Submit (img, config) OCR tasks to the shared pool. True if any finds the warning."""
+    futures = [_OCR_POOL.submit(_ocr_finds_warning, img, cfg) for img, cfg in tasks]
+    try:
+        for f in as_completed(futures):
+            if f.result():
+                for pending in futures:
+                    if pending is not f and not pending.done():
+                        pending.cancel()
+                return True
+        return False
+    finally:
+        # Already-running futures keep running in the pool until tesseract subprocess
+        # exits; their results are discarded. shutdown(wait=False) would have the same
+        # effect for a per-call pool — using a module pool avoids the create/destroy cost.
+        pass
+
+
 def _detect_government_warning_ocr(image_path: Path, back_image_path: Optional[Path]) -> Optional[str]:
     """OCR-based presence check: returns 'GOVERNMENT WARNING' only if exact uppercase phrase found.
 
-    Tiers cheapest strategies first across BOTH images before falling through to costlier ones.
-    Most labels resolve in tier 1 — only rotated/coloured-bg edge cases hit tier 3+.
+    Each tier runs its strategies in parallel via a shared thread pool, falling through to
+    the next tier only if no strategy in the current one found the phrase. Most labels
+    resolve in tier 1 in well under a second.
     """
     try:
         import pytesseract  # noqa: F401  (fail fast if missing)
-        # Prepare one set of derived images per source upfront — reused across tiers
         prepared = []
         for path in filter(None, [image_path, back_image_path]):
             if not path.exists():
@@ -628,31 +651,39 @@ def _detect_government_warning_ocr(image_path: Path, back_image_path: Optional[P
             return None
 
         # Tier 1: cheap whole-image OCR on each source
+        tier1 = []
         for p in prepared:
-            for img, cfg in [(p["gray"], ""), (p["up2"], ""), (p["up2"], "--psm 6"), (p["gray"], "--psm 12")]:
-                if _ocr_finds_warning(img, cfg):
-                    return "GOVERNMENT WARNING"
+            tier1.extend([
+                (p["gray"], ""),
+                (p["up2"], ""),
+                (p["up2"], "--psm 6"),
+                (p["gray"], "--psm 12"),
+            ])
+        if _any_match_parallel(tier1):
+            return "GOVERNMENT WARNING"
 
         # Tier 2: rotated whole image (180° upside-down, 90°/270° landscape labels)
+        tier2 = []
         for p in prepared:
             for angle in (180, 270, 90):
                 rot = p["gray"].rotate(angle, expand=True)
-                if _ocr_finds_warning(rot.resize((rot.width * 2, rot.height * 2), Image.LANCZOS)):
-                    return "GOVERNMENT WARNING"
+                tier2.append((rot.resize((rot.width * 2, rot.height * 2), Image.LANCZOS), ""))
+        if _any_match_parallel(tier2):
+            return "GOVERNMENT WARNING"
 
-        # Tier 3: single-colour channels — handles low-contrast cases
-        # (e.g. green-on-green, red-on-red where grayscale washes out the text)
+        # Tier 3: single-colour channels — handles green-on-green, red-on-red labels
+        tier3 = []
         for p in prepared:
             for ch in p["rgb"].split():
                 ch_up = ch.resize((ch.width * 2, ch.height * 2), Image.LANCZOS)
-                if _ocr_finds_warning(ch_up, "--psm 6"):
-                    return "GOVERNMENT WARNING"
+                tier3.append((ch_up, "--psm 6"))
                 rot = ch.rotate(180, expand=True)
-                if _ocr_finds_warning(rot.resize((rot.width * 2, rot.height * 2), Image.LANCZOS), "--psm 6"):
-                    return "GOVERNMENT WARNING"
+                tier3.append((rot.resize((rot.width * 2, rot.height * 2), Image.LANCZOS), "--psm 6"))
+        if _any_match_parallel(tier3):
+            return "GOVERNMENT WARNING"
 
-        # Tier 4: right-edge crop + 90° rotation. Catches labels with the warning printed
-        # sideways on a narrow strip at the edge (e.g. TOMMYROTTER series).
+        # Tier 4: right-edge crop + perpendicular rotation (TOMMYROTTER-style sideways text)
+        tier4 = []
         for p in prepared:
             w, h = p["rgb"].size
             for left_pct, top_pct in ((0.85, 0.30), (0.80, 0.0)):
@@ -661,8 +692,10 @@ def _detect_government_warning_ocr(image_path: Path, back_image_path: Optional[P
                 for ch in (gg, rr):
                     rot = ch.rotate(-90, expand=True)
                     scaled = rot.resize((rot.width * 4, rot.height * 4), Image.LANCZOS)
-                    if _ocr_finds_warning(scaled, "--psm 6"):
-                        return "GOVERNMENT WARNING"
+                    tier4.append((scaled, "--psm 6"))
+        if _any_match_parallel(tier4):
+            return "GOVERNMENT WARNING"
+
         return None
     except Exception:
         return None
