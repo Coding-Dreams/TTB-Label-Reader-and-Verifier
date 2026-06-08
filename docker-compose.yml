@@ -41,7 +41,7 @@ services:
       # Max concurrent tesseract subprocesses. Default 2 is the safe floor;
       # raise on machines with ample RAM/cores. Lower if libleptonica segfaults
       # appear in dmesg under load.
-      - OCR_PARALLELISM=2
+      - OCR_PARALLELISM=6
     depends_on:
       ollama:
         condition: service_healthy
