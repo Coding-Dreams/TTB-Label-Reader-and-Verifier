@@ -672,8 +672,9 @@ _URL_SUFFIX_RE = re.compile(r'\s+(?:www|http)\.\S+.*$', re.IGNORECASE)
 _DOTTED_ABBREV_RE = re.compile(r'\b([A-Z])\.([A-Z])\.?\s*$')
 # Detects "GOVERNMENT WARNING" with possible line-break between the two words
 _GOVT_WARNING_RE = re.compile(r'GOVERNMENT\s+WARNING')
-# Case-insensitive — sulfite mentions can appear in any case on a label
-_SULFITE_MENTION_RE = re.compile(r'\bsul[fp]hite', re.IGNORECASE)
+# Matches both 'sulfite' (American) and 'sulphite' (British). The 'h' after 'p'
+# is required only in the British form; the 'f' form has no h.
+_SULFITE_MENTION_RE = re.compile(r'\bsul(?:f|ph)ite', re.IGNORECASE)
 
 
 def _ocr_finds_warning(img, config: str = "") -> bool:
