@@ -267,7 +267,7 @@ async def extract_label_fields(
             )
             data["government_warning"] = gw_ocr
             if debug_info is not None:
-                debug_info["secondary"]["government_warning"] = {"ocr": gw_ocr}
+                debug_info["secondary"]["government_warning"] = {"raw": gw_ocr, "accepted": gw_ocr}
 
             return LabelFields(**data)
     finally:
@@ -600,17 +600,69 @@ _DOTTED_ABBREV_RE = re.compile(r'\b([A-Z])\.([A-Z])\.?\s*$')
 _GOVT_WARNING_RE = re.compile(r'GOVERNMENT\s+WARNING')
 
 
+def _ocr_finds_warning(img, config: str = "") -> bool:
+    """Single OCR call — True if exact uppercase 'GOVERNMENT WARNING' appears in result."""
+    import pytesseract
+    text = pytesseract.image_to_string(img, config=config)
+    return bool(_GOVT_WARNING_RE.search(text))
+
+
 def _detect_government_warning_ocr(image_path: Path, back_image_path: Optional[Path]) -> Optional[str]:
-    """OCR-based presence check: returns 'GOVERNMENT WARNING' only if exact uppercase phrase found."""
+    """OCR-based presence check: returns 'GOVERNMENT WARNING' only if exact uppercase phrase found.
+
+    Tiers cheapest strategies first across BOTH images before falling through to costlier ones.
+    Most labels resolve in tier 1 — only rotated/coloured-bg edge cases hit tier 3+.
+    """
     try:
-        import pytesseract
+        import pytesseract  # noqa: F401  (fail fast if missing)
+        # Prepare one set of derived images per source upfront — reused across tiers
+        prepared = []
         for path in filter(None, [image_path, back_image_path]):
             if not path.exists():
                 continue
-            img = ImageOps.exif_transpose(Image.open(path)).convert("L")
-            text = pytesseract.image_to_string(img)
-            if _GOVT_WARNING_RE.search(text):
-                return "GOVERNMENT WARNING"
+            rgb = ImageOps.exif_transpose(Image.open(path)).convert("RGB")
+            gray = rgb.convert("L")
+            up2 = gray.resize((gray.width * 2, gray.height * 2), Image.LANCZOS)
+            prepared.append({"rgb": rgb, "gray": gray, "up2": up2})
+        if not prepared:
+            return None
+
+        # Tier 1: cheap whole-image OCR on each source
+        for p in prepared:
+            for img, cfg in [(p["gray"], ""), (p["up2"], ""), (p["up2"], "--psm 6"), (p["gray"], "--psm 12")]:
+                if _ocr_finds_warning(img, cfg):
+                    return "GOVERNMENT WARNING"
+
+        # Tier 2: rotated whole image (180° upside-down, 90°/270° landscape labels)
+        for p in prepared:
+            for angle in (180, 270, 90):
+                rot = p["gray"].rotate(angle, expand=True)
+                if _ocr_finds_warning(rot.resize((rot.width * 2, rot.height * 2), Image.LANCZOS)):
+                    return "GOVERNMENT WARNING"
+
+        # Tier 3: single-colour channels — handles low-contrast cases
+        # (e.g. green-on-green, red-on-red where grayscale washes out the text)
+        for p in prepared:
+            for ch in p["rgb"].split():
+                ch_up = ch.resize((ch.width * 2, ch.height * 2), Image.LANCZOS)
+                if _ocr_finds_warning(ch_up, "--psm 6"):
+                    return "GOVERNMENT WARNING"
+                rot = ch.rotate(180, expand=True)
+                if _ocr_finds_warning(rot.resize((rot.width * 2, rot.height * 2), Image.LANCZOS), "--psm 6"):
+                    return "GOVERNMENT WARNING"
+
+        # Tier 4: right-edge crop + 90° rotation. Catches labels with the warning printed
+        # sideways on a narrow strip at the edge (e.g. TOMMYROTTER series).
+        for p in prepared:
+            w, h = p["rgb"].size
+            for left_pct, top_pct in ((0.85, 0.30), (0.80, 0.0)):
+                region = p["rgb"].crop((int(w * left_pct), int(h * top_pct), w, h))
+                rr, gg, _ = region.split()
+                for ch in (gg, rr):
+                    rot = ch.rotate(-90, expand=True)
+                    scaled = rot.resize((rot.width * 4, rot.height * 4), Image.LANCZOS)
+                    if _ocr_finds_warning(scaled, "--psm 6"):
+                        return "GOVERNMENT WARNING"
         return None
     except Exception:
         return None
