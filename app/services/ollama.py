@@ -45,8 +45,8 @@ Rules:
 - alcohol_content: the ABV percentage as printed (e.g. "45% ALC/VOL", "13% BY VOL")
 - net_contents: the TOTAL container size (e.g. "750 ML", "100 mL", "1 PINT") — the full bottle/can volume, NOT the alcohol-per-serving amount
 - contains_sulfites: search ALL panels for any sulfite statement — this includes BOTH positive declarations (e.g. "CONTAINS SULFITES", "Contains Sulfating Agents") AND negative declarations (e.g. "SULFITE FREE", "NO SULFITES ADDED", "Contains No Detectable Sulfites"); return the exact text if found, null if absent
-- producer_name_address: the FOREIGN winery, distillery, brewery, or producer — the entity that physically made the product, with their non-US address (e.g. "CHATEAU DUPONT, BORDEAUX, FRANCE", "H. MOUNIER, COGNAC, FRANCE"); null if the producer is US-based
-- us_importer: the US IMPORTER, BOTTLER, or DISTRIBUTOR — a company with a United States city and state; look for phrases like "IMPORTED BY:", "SOLE IMPORTER:", "BOTTLED BY:", "DISTRIBUTED BY:" followed by a US company name and address (e.g. "IMPORTED BY: ACME SPIRITS, MIAMI, FL", "BOTTLED BY: ABC DISTILLERY, LOUISVILLE, KY"); null if no US entity is listed
+- producer_name_address: the winery, distillery, brewery, or bottler that made or bottled this product, with their address. For DOMESTIC US products this is the US producer/bottler (e.g. "BIG EASY BLENDS LLC, KENNER, LA"). For IMPORTED products put only the FOREIGN producer here (e.g. "CHATEAU DUPONT, BORDEAUX, FRANCE") — do NOT put the US importer here, use us_importer for that
+- us_importer: for IMPORTED products only — the US IMPORTER, BOTTLER, or DISTRIBUTOR with a United States city and state; look for phrases like "IMPORTED BY:", "SOLE IMPORTER:", "IMPORTED AND BOTTLED BY:", "DISTRIBUTED BY:" followed by a US company name and address (e.g. "IMPORTED BY: ACME SPIRITS, MIAMI, FL"); null for domestic US products or if no US importer is listed
 - country_of_origin: the country name, but ONLY if explicitly stated as the product's origin (e.g. "Product of Canada", "Made in Germany", "Imported from France"). Do NOT infer from the beverage category or style name — "American Red Wine" does NOT mean country_of_origin is "United States"
 - government_warning: the COMPLETE warning text EXACTLY as printed, including the "GOVERNMENT WARNING:" heading if present
 
@@ -469,6 +469,16 @@ _TRAILING_USA_RE = re.compile(r',?\s*U\.?S\.?A?\.?\s*$', re.IGNORECASE)
 # US corporate entity suffixes — accept importer results that name a US company
 # even when the label omits the city/state address
 _US_COMPANY_RE = re.compile(r'\b(?:LLC|L\.L\.C\.|Inc\.?|Corp\.?|Ltd\.?|Co\.)\b', re.IGNORECASE)
+# Strips "IMPORTED BY:", "IMPORTED EXCLUSIVELY BY:", "BOTTLED BY:", etc. prefixes
+# from us_importer values before storing them as producer_name_address.
+_IMPORTER_PREFIX_RE = re.compile(
+    r'^\s*(?:IMPORTED|BOTTLED|DISTRIBUTED|PRODUCED|PACKED|MADE)'
+    r'(?:\s+AND\s+\w+)?(?:\s+EXCLUSIVELY)?'
+    r'\s+BY:?\s*',
+    re.IGNORECASE,
+)
+# Strips trailing website URLs (e.g. " www.ourniche.com")
+_URL_SUFFIX_RE = re.compile(r'\s+(?:www|http)\.\S+.*$', re.IGNORECASE)
 # Normalizes dotted state abbreviations like N.Y. or D.C. to NY / DC
 _DOTTED_ABBREV_RE = re.compile(r'\b([A-Z])\.([A-Z])\.?\s*$')
 
@@ -524,10 +534,12 @@ def _postprocess(data: dict) -> dict:
         if isinstance(val, str) and val.strip().lower() in _NULL_SENTINELS:
             data[key] = None
 
-    # Null out values that are JSON key names (model confused structure with content)
+    # Null out values that are JSON key names (model confused structure with content).
+    # Compare without space→underscore conversion: "CONTAINS SULFITES" must not match
+    # the field name "contains_sulfites" and be erroneously zeroed out.
     for key in list(data.keys()):
         val = data[key]
-        if isinstance(val, str) and val.strip().lower().replace(" ", "_") in _FIELD_NAMES:
+        if isinstance(val, str) and val.strip().lower() in _FIELD_NAMES:
             data[key] = None
 
     # Strip leading origin phrases from country_of_origin to get the bare country name
@@ -585,10 +597,13 @@ def _postprocess(data: dict) -> dict:
         data["class_type"] = normalized  # None if unrecognizable → triggers fallback call
 
     # If the model extracted a dedicated US importer, it takes precedence over
-    # the foreign producer — merge into the single producer_name_address field.
+    # the foreign producer — strip the "IMPORTED BY:" prefix and any trailing URL,
+    # then merge into the single producer_name_address field.
     us_importer = data.pop("us_importer", None)
     if us_importer:
-        data["producer_name_address"] = us_importer
+        cleaned = _IMPORTER_PREFIX_RE.sub('', us_importer).strip()
+        cleaned = _URL_SUFFIX_RE.sub('', cleaned).strip()
+        data["producer_name_address"] = cleaned or us_importer
 
     # Last-resort brand_name fallback for import labels
     if not data.get("brand_name") and data.get("producer_name_address"):
