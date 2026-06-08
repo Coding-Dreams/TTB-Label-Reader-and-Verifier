@@ -40,7 +40,7 @@ Required JSON format:
 
 Rules:
 - Return the exact text as it appears on the label for all fields except class_type
-- brand_name: the trade name or trademark that identifies the brand — NOT the product series, style, or variety descriptor (e.g. the brand is "Modelo", not "Modelo Negra Especial"; "Harold's Gin", not "Single Barrel Gin"). Also do NOT capture the producer, brewery, winery, or distillery company name
+- brand_name: the primary product name shown in the most prominent or stylized text on the front panel — what a consumer would use to ask for this product (e.g. "Salento Fiano", "Fête Rosé", "TNT Tennessee Tea", "TOMMYROTTER"). Do NOT use the producer/bottler company name if it appears only in smaller text as part of an address or bottler line. Do NOT use a purely descriptive product line (e.g. "CASK STRENGTH BOURBON-BARREL GIN") when a distinct brand identifier is also present on the label
 - class_type: EXACTLY one of three values — "Wine", "Malt Beverage", or "Distilled Spirits". Wine = grape/fruit wines, champagne, prosecco, cider. Malt Beverage = beer, ale, lager, stout, porter, IPA, hard seltzer. Distilled Spirits = whiskey, bourbon, rum, vodka, gin, tequila, brandy, liqueur, and similar spirits. IMPORTANT: if the label shows any distilled spirit name (VODKA, GIN, RUM, WHISKEY, TEQUILA, etc.) classify as "Distilled Spirits" even if it is a flavored or canned cocktail — only use "Malt Beverage" if no distilled spirit name is present
 - alcohol_content: the ABV percentage as printed (e.g. "45% ALC/VOL", "13% BY VOL")
 - net_contents: the TOTAL container size (e.g. "750 ML", "100 mL", "1 PINT") — the full bottle/can volume, NOT the alcohol-per-serving amount
@@ -70,9 +70,11 @@ def _auto_orient(img: Image.Image) -> Image.Image:
     try:
         import pytesseract
         osd = pytesseract.image_to_osd(img, output_type=pytesseract.Output.DICT)
-        angle = int(osd.get("rotate", 0))
-        if angle != 0:
-            img = img.rotate(angle, expand=True)
+        # Only correct upside-down (180°). 90°/270° on landscape labels with
+        # decorative imagery are frequently OSD mis-detections; phone photos
+        # with wrong sideways orientation are already fixed by exif_transpose above.
+        if int(osd.get("rotate", 0)) == 180:
+            img = img.rotate(180, expand=True)
     except Exception:
         pass  # tesseract unavailable or insufficient text for OSD — proceed as-is
     return img
