@@ -48,7 +48,7 @@ Rules:
 - producer_name_address: the winery, distillery, brewery, or bottler that made or bottled this product, with their address. For DOMESTIC US products this is the US producer/bottler (e.g. "BIG EASY BLENDS LLC, KENNER, LA"). For IMPORTED products put only the FOREIGN producer here (e.g. "CHATEAU DUPONT, BORDEAUX, FRANCE") — do NOT put the US importer here, use us_importer for that
 - us_importer: for IMPORTED products only — the US IMPORTER, BOTTLER, or DISTRIBUTOR with a United States city and state; look for phrases like "IMPORTED BY:", "SOLE IMPORTER:", "IMPORTED AND BOTTLED BY:", "DISTRIBUTED BY:" followed by a US company name and address (e.g. "IMPORTED BY: ACME SPIRITS, MIAMI, FL"); null for domestic US products or if no US importer is listed
 - country_of_origin: the country name, but ONLY if explicitly stated as the product's origin (e.g. "Product of Canada", "Made in Germany", "Imported from France"). Do NOT infer from the beverage category or style name — "American Red Wine" does NOT mean country_of_origin is "United States"
-- government_warning: the COMPLETE warning text EXACTLY as printed, including the "GOVERNMENT WARNING:" heading if present. Do NOT change capitalization or formatting, just copy the EXACT wording.
+- government_warning: return exactly "GOVERNMENT WARNING" (those two words, all uppercase) if the label contains that phrase in all uppercase letters; otherwise null. Do NOT copy the warning body text.
 
 Example output for an imported cognac label:
 {
@@ -60,7 +60,7 @@ Example output for an imported cognac label:
   "producer_name_address": "H. MOUNIER, JARNAC, FRANCE",
   "us_importer": "IMPORTED BY: SIDNEY FRANK IMPORTING CO., INC., NEW ROCHELLE, NY 10801",
   "country_of_origin": "France",
-  "government_warning": "GOVERNMENT WARNING: (1) According to the Surgeon General, women should not drink alcoholic beverages during pregnancy because of the risk of birth defects. (2) Consumption of alcoholic beverages impairs your ability to drive a car or operate machinery, and may cause health problems."
+  "government_warning": "GOVERNMENT WARNING"
 }"""
 
 

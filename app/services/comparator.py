@@ -4,7 +4,7 @@ from thefuzz import fuzz
 from app.models.label import LabelFields
 from app.models.result import FieldResult, FieldStatus, VerificationResult
 
-_REQUIRED_WARNING_PREFIX = "GOVERNMENT WARNING:"
+_REQUIRED_WARNING = "GOVERNMENT WARNING"
 
 # Matches negation words that turn a sulfite mention into a "no sulfites" statement
 _SULFITE_ABSENT_RE = re.compile(
@@ -33,7 +33,7 @@ def check_government_warning(
             extracted_value=None,
             submitted_value=submitted,
         )
-    passes = _REQUIRED_WARNING_PREFIX in extracted
+    passes = extracted == _REQUIRED_WARNING
     return FieldResult(
         field="government_warning",
         status=FieldStatus.PASS if passes else FieldStatus.FAIL,
