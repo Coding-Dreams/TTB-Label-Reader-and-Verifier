@@ -14,15 +14,19 @@ import httpx
 from pathlib import Path
 from PIL import Image, ImageEnhance, ImageOps
 
-# Shared pool for OCR strategies — pytesseract calls a subprocess, so it releases
-# the GIL; threading parallelises wall-time on multi-strategy cascades.
-_OCR_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="gw-ocr-")
+# Concurrency budget for tesseract subprocesses. Each pytesseract call spawns a
+# subprocess that loads tesseract + leptonica into memory; too many in flight at
+# once causes segfaults inside libleptonica (observed with 5+ concurrent subprocesses
+# on upscaled images). Set OCR_PARALLELISM higher on machines with abundant
+# RAM/cores — but verify stability before raising in production. Default 2 is the
+# safe floor we know never crashes.
+_OCR_PARALLELISM = max(1, int(os.getenv("OCR_PARALLELISM", "2")))
 
-# Process-wide bound on concurrent tesseract subprocesses. Each call spawns a
-# subprocess that loads tesseract + leptonica; too many in flight at once causes
-# segfaults inside libleptonica (we hit this with 5+ concurrent processes on
-# upscaled images). Two is enough for parallelism without resource pressure.
-_TESSERACT_SEM = threading.Semaphore(2)
+# Thread pool runs the OCR orchestration; semaphore bounds actual tesseract calls.
+# Both sized identically — pool threads will spend their time blocked on the
+# semaphore otherwise, which just wastes thread objects.
+_OCR_POOL = ThreadPoolExecutor(max_workers=_OCR_PARALLELISM, thread_name_prefix="gw-ocr-")
+_TESSERACT_SEM = threading.Semaphore(_OCR_PARALLELISM)
 
 
 def _safe_image_to_string(img, config: str = "") -> str:
