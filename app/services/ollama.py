@@ -40,7 +40,7 @@ Required JSON format:
 
 Rules:
 - Return the exact text as it appears on the label for all fields except class_type
-- brand_name: the label/product name printed on the front that identifies this specific product (e.g. "ABC Single Barrel", "Honey Huckleberry Pie", "12345 Imports") — often the most prominent or stylistic name; do NOT capture the producer, brewery, winery, or distillery company name
+- brand_name: the trade name or trademark that identifies the brand — NOT the product series, style, or variety descriptor (e.g. the brand is "Modelo", not "Modelo Negra Especial"; "TOMMYROTTER", not "CASK STRENGTH BOURBON-BARREL GIN"). Also do NOT capture the producer, brewery, winery, or distillery company name
 - class_type: EXACTLY one of three values — "Wine", "Malt Beverage", or "Distilled Spirits". Wine = grape/fruit wines, champagne, prosecco, cider. Malt Beverage = beer, ale, lager, stout, porter, IPA, hard seltzer. Distilled Spirits = whiskey, bourbon, rum, vodka, gin, tequila, brandy, liqueur, and similar spirits. IMPORTANT: if the label shows any distilled spirit name (VODKA, GIN, RUM, WHISKEY, TEQUILA, etc.) classify as "Distilled Spirits" even if it is a flavored or canned cocktail — only use "Malt Beverage" if no distilled spirit name is present
 - alcohol_content: the ABV percentage as printed (e.g. "45% ALC/VOL", "13% BY VOL")
 - net_contents: the TOTAL container size (e.g. "750 ML", "100 mL", "1 PINT") — the full bottle/can volume, NOT the alcohol-per-serving amount
