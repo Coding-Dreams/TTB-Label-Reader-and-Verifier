@@ -172,6 +172,12 @@ async def extract_label_fields(
 ) -> LabelFields:
     stitched: Optional[Path] = None
     loop = asyncio.get_running_loop()
+    # Kick off OCR for government_warning immediately — it only needs the raw image
+    # paths and runs in a thread pool, so it overlaps with image stitching, the main
+    # VLM call, and every secondary VLM pass. Awaited just before the final return.
+    gw_ocr_future = loop.run_in_executor(
+        None, _detect_government_warning_ocr, image_path, back_image_path
+    )
     try:
         back_b64: Optional[str] = None
         if back_image_path and back_image_path.exists():
@@ -197,13 +203,6 @@ async def extract_label_fields(
             if debug_info is not None:
                 debug_info["after_postprocess"] = dict(data)
                 debug_info["secondary"] = {}
-
-            # Kick off the OCR pass now — it only needs the image paths, so it can run
-            # concurrently with all the VLM secondary passes below. Awaited just before
-            # the final return so its result is ready when needed.
-            gw_ocr_future = loop.run_in_executor(
-                None, _detect_government_warning_ocr, image_path, back_image_path
-            )
 
             # Back panel often carries sulfite statements and regulatory text.
             # Encode at higher resolution for the dedicated sulfite scan — small-print
