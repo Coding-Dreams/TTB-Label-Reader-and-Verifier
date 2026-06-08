@@ -48,7 +48,7 @@ Rules:
 - producer_name_address: the winery, distillery, brewery, or bottler that made or bottled this product, with their address. For DOMESTIC US products this is the US producer/bottler (e.g. "BIG EASY BLENDS LLC, KENNER, LA"). For IMPORTED products put only the FOREIGN producer here (e.g. "CHATEAU DUPONT, BORDEAUX, FRANCE") — do NOT put the US importer here, use us_importer for that
 - us_importer: for IMPORTED products only — the US IMPORTER, BOTTLER, or DISTRIBUTOR with a United States city and state; look for phrases like "IMPORTED BY:", "SOLE IMPORTER:", "IMPORTED AND BOTTLED BY:", "DISTRIBUTED BY:" followed by a US company name and address (e.g. "IMPORTED BY: ACME SPIRITS, MIAMI, FL"); null for domestic US products or if no US importer is listed
 - country_of_origin: the country name, but ONLY if explicitly stated as the product's origin (e.g. "Product of Canada", "Made in Germany", "Imported from France"). Do NOT infer from the beverage category or style name — "American Red Wine" does NOT mean country_of_origin is "United States"
-- government_warning: the COMPLETE warning text EXACTLY as printed, including the "GOVERNMENT WARNING:" heading if present
+- government_warning: the COMPLETE warning text EXACTLY as printed, including the "GOVERNMENT WARNING:" heading if present. Do NOT change capitalization or formatting, just copy the EXACT wording.
 
 Example output for an imported cognac label:
 {
@@ -619,8 +619,8 @@ def _postprocess(data: dict) -> dict:
 
     # Ensure government_warning includes the required prefix
     gw = data.get("government_warning")
-    if gw and not gw.upper().lstrip().startswith("GOVERNMENT WARNING"):
-        data["government_warning"] = "GOVERNMENT WARNING: " + gw.strip()
+    if gw:
+        data["government_warning"] = gw
 
     # Null out brand_name if it's actually the producer name
     if data.get("brand_name") and data.get("producer_name_address"):
