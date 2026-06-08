@@ -48,7 +48,7 @@ Rules:
 - producer_name_address: the winery, distillery, brewery, or bottler that made or bottled this product, with their address. For DOMESTIC US products this is the US producer/bottler (e.g. "BIG EASY BLENDS LLC, KENNER, LA"). For IMPORTED products put only the FOREIGN producer here (e.g. "CHATEAU DUPONT, BORDEAUX, FRANCE") — do NOT put the US importer here, use us_importer for that
 - us_importer: for IMPORTED products only — the US IMPORTER, BOTTLER, or DISTRIBUTOR with a United States city and state; look for phrases like "IMPORTED BY:", "SOLE IMPORTER:", "IMPORTED AND BOTTLED BY:", "DISTRIBUTED BY:" followed by a US company name and address (e.g. "IMPORTED BY: ACME SPIRITS, MIAMI, FL"); null for domestic US products or if no US importer is listed
 - country_of_origin: the country name, but ONLY if explicitly stated as the product's origin (e.g. "Product of Canada", "Made in Germany", "Imported from France"). Do NOT infer from the beverage category or style name — "American Red Wine" does NOT mean country_of_origin is "United States"
-- government_warning: return exactly "GOVERNMENT WARNING" (those two words, all uppercase) if the label contains that phrase in all uppercase letters; otherwise null. Do NOT copy the warning body text.
+- government_warning: return exactly "GOVERNMENT WARNING" (those two words, all uppercase) if the label contains that phrase in all uppercase letters; otherwise null. Do NOT copy the warning body text and IGNORE the warning body text. ONLY focus on the GOVERNMENT WARNING.
 
 Example output for an imported cognac label:
 {
@@ -258,6 +258,16 @@ async def extract_label_fields(
                     cleaned = _IMPORTER_PREFIX_RE.sub('', importer).strip()
                     cleaned = _URL_SUFFIX_RE.sub('', cleaned).strip()
                     data["producer_name_address"] = cleaned or importer
+
+            # OCR-based government_warning: exact uppercase check overrides VLM output.
+            # Prevents both false positives (model normalises lowercase text to uppercase)
+            # and false negatives (model misses small-print text the OCR can still read).
+            gw_ocr = await loop.run_in_executor(
+                None, _detect_government_warning_ocr, image_path, back_image_path
+            )
+            data["government_warning"] = gw_ocr
+            if debug_info is not None:
+                debug_info["secondary"]["government_warning"] = {"ocr": gw_ocr}
 
             return LabelFields(**data)
     finally:
@@ -586,6 +596,24 @@ _IMPORTER_PREFIX_RE = re.compile(
 _URL_SUFFIX_RE = re.compile(r'\s+(?:www|http)\.\S+.*$', re.IGNORECASE)
 # Normalizes dotted state abbreviations like N.Y. or D.C. to NY / DC
 _DOTTED_ABBREV_RE = re.compile(r'\b([A-Z])\.([A-Z])\.?\s*$')
+# Detects "GOVERNMENT WARNING" with possible line-break between the two words
+_GOVT_WARNING_RE = re.compile(r'GOVERNMENT\s+WARNING')
+
+
+def _detect_government_warning_ocr(image_path: Path, back_image_path: Optional[Path]) -> Optional[str]:
+    """OCR-based presence check: returns 'GOVERNMENT WARNING' only if exact uppercase phrase found."""
+    try:
+        import pytesseract
+        for path in filter(None, [image_path, back_image_path]):
+            if not path.exists():
+                continue
+            img = ImageOps.exif_transpose(Image.open(path)).convert("L")
+            text = pytesseract.image_to_string(img)
+            if _GOVT_WARNING_RE.search(text):
+                return "GOVERNMENT WARNING"
+        return None
+    except Exception:
+        return None
 
 
 def _is_us_address(addr: str) -> bool:
@@ -674,13 +702,6 @@ def _postprocess(data: dict) -> dict:
                 "import" in producer
             ):
                 data["country_of_origin"] = None
-
-    # Null out brand_name if it's actually the producer name
-    if data.get("brand_name") and data.get("producer_name_address"):
-        bn_lower = data["brand_name"].strip().lower()
-        prod_lower = data["producer_name_address"].strip().lower()
-        if _COMPANY_TYPE_RE.search(data["brand_name"]) and bn_lower in prod_lower:
-            data["brand_name"] = None
 
     # If brand_name is null and class_type doesn't contain any standard beverage-type
     # word, the model likely put the product name in the wrong field — swap them.
