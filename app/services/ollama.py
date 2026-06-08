@@ -235,6 +235,30 @@ async def extract_label_fields(
                     debug_info["secondary"]["net_contents"] = {"raw": sink.get("raw"), "accepted": result}
                 data["net_contents"] = result
 
+            # If producer/bottler still missing, look for it specifically on the back panel
+            if not data.get("producer_name_address"):
+                prod_b64 = back_b64 or image_b64
+                sink = {} if debug_info is not None else None
+                result = await _extract_producer(client, prod_b64, _debug_sink=sink)
+                if debug_info is not None:
+                    debug_info["secondary"]["producer_name_address"] = {"raw": sink.get("raw"), "accepted": result}
+                if result:
+                    result = _IMPORTER_PREFIX_RE.sub('', result).strip()
+                    result = _URL_SUFFIX_RE.sub('', result).strip()
+                    data["producer_name_address"] = result or None
+
+            # If producer is a non-US address, the US importer was missed in the main pass —
+            # run a dedicated importer lookup on the full stitched image
+            if data.get("producer_name_address") and not _is_us_address(data["producer_name_address"]):
+                sink = {} if debug_info is not None else None
+                importer = await _extract_importer(client, image_b64)
+                if debug_info is not None:
+                    debug_info["secondary"]["us_importer"] = {"raw": importer, "accepted": importer}
+                if importer:
+                    cleaned = _IMPORTER_PREFIX_RE.sub('', importer).strip()
+                    cleaned = _URL_SUFFIX_RE.sub('', cleaned).strip()
+                    data["producer_name_address"] = cleaned or importer
+
             return LabelFields(**data)
     finally:
         if stitched:
@@ -378,6 +402,40 @@ async def _extract_importer(client: httpx.AsyncClient, image_b64: str) -> Option
     return result if accepted else None
 
 
+async def _extract_producer(
+    client: httpx.AsyncClient, image_b64: str, _debug_sink: Optional[dict] = None
+) -> Optional[str]:
+    resp = await client.post(
+        f"{OLLAMA_BASE_URL}/api/chat",
+        json={
+            "model": MODEL,
+            "messages": [{"role": "user",
+                "content": (
+                    "Look at this alcohol beverage label. "
+                    "Find the PRODUCER, BOTTLER, BREWER, or MANUFACTURER — the company "
+                    "that made or packaged this product — with their full address. "
+                    "Look for phrases like 'PRODUCED BY:', 'BOTTLED BY:', 'BREWED BY:', "
+                    "'PRODUCED & PACKAGED BY:', 'MANUFACTURED BY:', 'BREWED AND BOTTLED BY:', "
+                    "or a company name followed by a city and state/country. "
+                    "Return the complete entry exactly as printed on the label, "
+                    "including any prefix such as 'PRODUCED BY:'. "
+                    "If not found, reply with exactly: none"
+                ),
+                "images": [image_b64]}],
+            "stream": False,
+            "keep_alive": -1,
+            "options": {"temperature": 0.1},
+        },
+    )
+    resp.raise_for_status()
+    result = resp.json()["message"]["content"].strip().split("\n")[0].strip()
+    if _debug_sink is not None:
+        _debug_sink["raw"] = result
+    if result.lower() in _NULL_SENTINELS or result.lower() in ("no", "not found", "not present"):
+        return None
+    return result or None
+
+
 async def _extract_net_contents(
     client: httpx.AsyncClient, image_b64: str, _debug_sink: Optional[dict] = None
 ) -> Optional[str]:
@@ -516,11 +574,11 @@ _TRAILING_USA_RE = re.compile(r',?\s*U\.?S\.?A?\.?\s*$', re.IGNORECASE)
 # US corporate entity suffixes — accept importer results that name a US company
 # even when the label omits the city/state address
 _US_COMPANY_RE = re.compile(r'\b(?:LLC|L\.L\.C\.|Inc\.?|Corp\.?|Ltd\.?|Co\.)\b', re.IGNORECASE)
-# Strips "IMPORTED BY:", "IMPORTED EXCLUSIVELY BY:", "BOTTLED BY:", etc. prefixes
-# from us_importer values before storing them as producer_name_address.
+# Strips "IMPORTED BY:", "IMPORTED EXCLUSIVELY BY:", "BOTTLED BY:",
+# "PRODUCED & PACKAGED BY:", etc. prefixes from producer/importer values.
 _IMPORTER_PREFIX_RE = re.compile(
     r'^\s*(?:IMPORTED|BOTTLED|DISTRIBUTED|PRODUCED|PACKED|MADE)'
-    r'(?:\s+AND\s+\w+)?(?:\s+EXCLUSIVELY)?'
+    r'(?:\s+(?:AND|&)\s+\w+)?(?:\s+EXCLUSIVELY)?'
     r'\s+BY:?\s*',
     re.IGNORECASE,
 )
@@ -641,11 +699,23 @@ def _postprocess(data: dict) -> dict:
     # If the model extracted a dedicated US importer, it takes precedence over
     # the foreign producer — strip the "IMPORTED BY:" prefix and any trailing URL,
     # then merge into the single producer_name_address field.
+    _pre_swap_producer = (data.get("producer_name_address") or "").strip().lower()
     us_importer = data.pop("us_importer", None)
     if us_importer:
         cleaned = _IMPORTER_PREFIX_RE.sub('', us_importer).strip()
         cleaned = _URL_SUFFIX_RE.sub('', cleaned).strip()
         data["producer_name_address"] = cleaned or us_importer
+
+        # For imported labels: if brand_name starts the pre-swap producer string
+        # (e.g. "Felline" in "FELLINE Soc. Agr. a r. l., MANDURIA, ITALIA"), the
+        # model captured the bottler entity instead of the product brand — null it
+        # so the secondary brand_name pass finds the actual label text.
+        bn = (data.get("brand_name") or "").strip().lower()
+        n = len(bn)
+        if bn and _pre_swap_producer and _pre_swap_producer.startswith(bn) and (
+            n == len(_pre_swap_producer) or not _pre_swap_producer[n].isalnum()
+        ):
+            data["brand_name"] = None
 
     # Last-resort brand_name fallback for import labels
     if not data.get("brand_name") and data.get("producer_name_address"):

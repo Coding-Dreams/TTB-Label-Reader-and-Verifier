@@ -96,6 +96,8 @@ async def verify(
         raise HTTPException(status_code=504, detail="Model took too long — try again")
     except httpx.ConnectError:
         raise HTTPException(status_code=503, detail="Verification service unavailable — is Ollama running?")
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Verification failed: {str(e)}")
     finally:
         tmp.unlink(missing_ok=True)
         if tmp_back:
