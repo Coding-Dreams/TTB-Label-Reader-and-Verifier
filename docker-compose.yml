@@ -1,6 +1,7 @@
 services:
   ollama:
     image: ollama/ollama
+    restart: unless-stopped
     volumes:
       - ollama_data:/root/.ollama
     deploy:

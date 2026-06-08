@@ -414,19 +414,26 @@ async def _extract_net_contents(
 async def _call_ollama(
     client: httpx.AsyncClient, image_b64: str, prompt: str
 ) -> str:
-    resp = await client.post(
-        f"{OLLAMA_BASE_URL}/api/chat",
-        json={
-            "model": MODEL,
-            "messages": [{"role": "user", "content": prompt, "images": [image_b64]}],
-            "stream": False,
-            "format": "json",
-            "keep_alive": -1,
-            "options": {"temperature": 0.1},
-        },
-    )
-    resp.raise_for_status()
-    return resp.json()["message"]["content"]
+    for attempt in range(3):
+        try:
+            resp = await client.post(
+                f"{OLLAMA_BASE_URL}/api/chat",
+                json={
+                    "model": MODEL,
+                    "messages": [{"role": "user", "content": prompt, "images": [image_b64]}],
+                    "stream": False,
+                    "format": "json",
+                    "keep_alive": -1,
+                    "options": {"temperature": 0.1},
+                },
+            )
+            resp.raise_for_status()
+            return resp.json()["message"]["content"]
+        except (httpx.ConnectError, httpx.RemoteProtocolError) as exc:
+            if attempt == 2:
+                raise
+            logger.warning("Ollama unreachable (attempt %d/3), retrying in 15s: %s", attempt + 1, exc)
+            await asyncio.sleep(15)
 
 
 def _parse_json(raw: str) -> dict:
