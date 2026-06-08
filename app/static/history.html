@@ -14,7 +14,7 @@
     <a href="/history" class="font-semibold text-blue-600">History</a>
   </nav>
 
-  <main class="max-w-5xl mx-auto p-6">
+  <main class="max-w-6xl mx-auto p-6">
     <h1 class="text-2xl font-bold text-gray-800 mb-6">Verification History</h1>
 
     <div class="bg-white rounded-lg shadow overflow-hidden">
@@ -25,11 +25,12 @@
             <th class="px-4 py-3">File</th>
             <th class="px-4 py-3">Type</th>
             <th class="px-4 py-3">Result</th>
+            <th class="px-4 py-3">PDF</th>
             <th class="px-4 py-3"></th>
           </tr>
         </thead>
         <tbody id="history-body">
-          <tr><td colspan="5" class="px-4 py-6 text-center text-gray-400">Loading...</td></tr>
+          <tr><td colspan="6" class="px-4 py-6 text-center text-gray-400">Loading...</td></tr>
         </tbody>
       </table>
     </div>
@@ -38,9 +39,19 @@
     <div id="detail-panel" class="hidden mt-6 bg-white rounded-lg shadow p-5">
       <div class="flex justify-between items-center mb-3">
         <h2 id="detail-title" class="font-semibold text-gray-700"></h2>
-        <button onclick="document.getElementById('detail-panel').classList.add('hidden')"
-          class="text-gray-400 hover:text-gray-600 text-lg">✕</button>
+        <div class="flex items-center gap-3">
+          <a id="detail-pdf" href="#" target="_blank"
+            class="text-sm text-blue-600 hover:text-blue-800 hidden">Download COLA PDF</a>
+          <button onclick="document.getElementById('detail-panel').classList.add('hidden')"
+            class="text-gray-400 hover:text-gray-600 text-lg">✕</button>
+        </div>
       </div>
+
+      <!-- Compliance summary -->
+      <div id="detail-compliance" class="mb-4 text-sm"></div>
+
+      <!-- Form-match table -->
+      <h3 class="font-semibold text-gray-700 text-sm mb-2">Application vs. Label</h3>
       <table class="w-full text-sm">
         <thead>
           <tr class="text-left text-gray-500 border-b">
@@ -59,7 +70,8 @@
     const FIELD_LABELS = {
       brand_name: 'Brand Name', class_type: 'Class / Type', alcohol_content: 'Alcohol Content',
       net_contents: 'Net Contents', producer_name_address: 'Producer Name & Address',
-      country_of_origin: 'Country of Origin', government_warning: 'Government Warning'
+      country_of_origin: 'Country of Origin', government_warning: 'Government Warning',
+      contains_sulfites: 'Sulfite Declaration'
     };
     const STATUS_STYLE = {
       pass: 'text-green-600 font-semibold', fail: 'text-red-600 font-semibold',
@@ -72,7 +84,7 @@
       const records = await res.json();
       const tbody = document.getElementById('history-body');
       if (!records.length) {
-        tbody.innerHTML = '<tr><td colspan="5" class="px-4 py-6 text-center text-gray-400">No verifications yet.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-6 text-center text-gray-400">No verifications yet.</td></tr>';
         return;
       }
       tbody.innerHTML = records.map(r => {
@@ -81,11 +93,15 @@
         const result = r.overall_pass
           ? '<span class="text-green-600 font-semibold">✓ Pass</span>'
           : '<span class="text-red-600 font-semibold">✗ Fail</span>';
-        return `<tr class="border-b last:border-0 hover:bg-gray-50 cursor-pointer" onclick="showDetail(${r.id}, '${r.image_filename}')">
+        const pdfLink = `<a href="/api/history/${r.id}/pdf" target="_blank"
+            onclick="event.stopPropagation()"
+            class="text-blue-600 hover:text-blue-800 text-xs">Download</a>`;
+        return `<tr class="border-b last:border-0 hover:bg-gray-50 cursor-pointer" onclick="showDetail(${r.id}, '${escapeAttr(r.image_filename)}')">
           <td class="px-4 py-3 text-gray-600">${dt}</td>
-          <td class="px-4 py-3 text-gray-800">${r.image_filename}</td>
+          <td class="px-4 py-3 text-gray-800">${escapeHtml(r.image_filename)}</td>
           <td class="px-4 py-3 text-gray-500">${type}</td>
           <td class="px-4 py-3">${result}</td>
+          <td class="px-4 py-3">${pdfLink}</td>
           <td class="px-4 py-3 text-blue-500 text-xs">View</td>
         </tr>`;
       }).join('');
@@ -95,16 +111,53 @@
       const res = await fetch(`/api/history/${id}`);
       const record = await res.json();
       const results = JSON.parse(record.results);
+
       document.getElementById('detail-title').textContent = filename;
-      document.getElementById('detail-body').innerHTML = results.fields.map(f => `
+      const pdfLink = document.getElementById('detail-pdf');
+      pdfLink.href = `/api/history/${id}/pdf`;
+      pdfLink.classList.remove('hidden');
+
+      // Compliance summary — handle both new shape (form_match + compliance) and legacy
+      const complianceBlock = document.getElementById('detail-compliance');
+      if (results.compliance) {
+        const c = results.compliance;
+        if (c.compliant) {
+          complianceBlock.innerHTML = `
+            <div class="inline-block bg-green-50 text-green-700 px-3 py-1 rounded font-semibold">
+              ✓ TTB compliant
+            </div>`;
+        } else {
+          complianceBlock.innerHTML = `
+            <div class="bg-red-50 border border-red-200 rounded p-3">
+              <div class="font-semibold text-red-700 mb-1">✗ TTB compliance violations</div>
+              <ul class="list-disc list-inside text-red-700 space-y-1">
+                ${c.violations.map(v => `<li><strong>${escapeHtml(v.label)}:</strong> ${escapeHtml(v.message)}</li>`).join('')}
+              </ul>
+            </div>`;
+        }
+      } else {
+        complianceBlock.innerHTML = '';
+      }
+
+      // Form-match table — new shape (results.form_match.fields) or legacy (results.fields)
+      const fields = (results.form_match && results.form_match.fields) || results.fields || [];
+      document.getElementById('detail-body').innerHTML = fields.map(f => `
         <tr class="border-b last:border-0">
           <td class="py-2 text-gray-700">${FIELD_LABELS[f.field] || f.field}</td>
           <td class="py-2 ${STATUS_STYLE[f.status]}">${STATUS_ICON[f.status]} ${f.status.replace('_', ' ')}</td>
-          <td class="py-2 text-gray-600 text-xs max-w-xs truncate">${f.extracted_value ?? '—'}</td>
-          <td class="py-2 text-gray-600 text-xs max-w-xs truncate">${f.submitted_value ?? '—'}</td>
+          <td class="py-2 text-gray-600 text-xs max-w-xs truncate">${escapeHtml(f.extracted_value ?? '—')}</td>
+          <td class="py-2 text-gray-600 text-xs max-w-xs truncate">${escapeHtml(f.submitted_value ?? '—')}</td>
         </tr>`).join('');
       document.getElementById('detail-panel').classList.remove('hidden');
     }
+
+    function escapeHtml(s) {
+      if (s == null) return '';
+      return String(s)
+        .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;').replaceAll("'", '&#39;');
+    }
+    function escapeAttr(s) { return escapeHtml(s).replaceAll("'", '&apos;'); }
 
     loadHistory();
   </script>
