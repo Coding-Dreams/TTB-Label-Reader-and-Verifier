@@ -717,18 +717,21 @@ def _postprocess(data: dict) -> dict:
         ):
             data["brand_name"] = None
 
-    # Last-resort brand_name fallback for import labels
+    # Last-resort brand_name fallback: extract the company name from a foreign producer
+    # address when no brand was found elsewhere. Skip US addresses — after the importer
+    # swap the producer field holds the US importer company, not the product brand.
     if not data.get("brand_name") and data.get("producer_name_address"):
         producer = data["producer_name_address"]
-        stripped = re.sub(
-            r'^\s*(?:BOTTLED|IMPORTED|PRODUCED|DISTRIBUTED|BREWED|PACKED)\s+BY:?\s*',
-            '', producer, flags=re.IGNORECASE,
-        ).strip()
-        name_part = re.sub(r',?\s+[\w\s]{2,},\s+[A-Z]{2}\s*$', '', stripped).strip()
-        if (name_part
-                and name_part.lower() != producer.strip().lower()
-                and len(name_part) > 2
-                and not _COMPANY_TYPE_RE.search(name_part)):
-            data["brand_name"] = name_part
+        if not _is_us_address(producer):
+            stripped = re.sub(
+                r'^\s*(?:BOTTLED|IMPORTED|PRODUCED|DISTRIBUTED|BREWED|PACKED)\s+BY:?\s*',
+                '', producer, flags=re.IGNORECASE,
+            ).strip()
+            name_part = re.sub(r',?\s+[\w\s]{2,},\s+[A-Z]{2}\s*$', '', stripped).strip()
+            if (name_part
+                    and name_part.lower() != producer.strip().lower()
+                    and len(name_part) > 2
+                    and not _COMPANY_TYPE_RE.search(name_part)):
+                data["brand_name"] = name_part
 
     return data
