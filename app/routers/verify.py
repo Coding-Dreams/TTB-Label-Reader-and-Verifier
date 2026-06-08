@@ -8,6 +8,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 
 from app.models.label import LabelFields
 from app.services.comparator import compare_label
+from app.services.compliance import check_compliance
 from app.services.db import save_verification
 from app.services.ollama import extract_label_fields
 
@@ -83,15 +84,27 @@ async def verify(
             government_warning=government_warning or None,
             contains_sulfites=contains_sulfites or None,
         )
-        result = compare_label(extracted, form_data)
+        match_result = compare_label(extracted, form_data)
+        compliance = check_compliance(extracted.model_dump())
+
+        # Verification passes only when both the application matches the extraction
+        # AND the label itself satisfies TTB rules. Either failing makes the whole
+        # submission a fail.
+        overall_pass = match_result.overall_pass and compliance["compliant"]
+        response = {
+            "overall_pass": overall_pass,
+            "form_match": match_result.model_dump(),
+            "compliance": compliance,
+        }
+
         save_verification(
             image_filename=image.filename,
             form_data=form_data.model_dump(),
             extracted=extracted.model_dump(),
-            results=result.model_dump(),
-            overall_pass=result.overall_pass,
+            results=response,
+            overall_pass=overall_pass,
         )
-        return result.model_dump()
+        return response
     except httpx.TimeoutException:
         raise HTTPException(status_code=504, detail="Model took too long — try again")
     except httpx.ConnectError:

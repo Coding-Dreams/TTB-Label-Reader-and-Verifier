@@ -262,28 +262,16 @@ def test_extract_fields(api, folder, show_ocr):
 #
 # Truth files can set 'expected_overall: false' to flag intentionally
 # non-compliant labels (this test then expects compliance to FAIL).
+#
+# The actual rule definitions live in app.services.compliance so the verify
+# endpoint and this test enforce the same checks by construction.
 # ---------------------------------------------------------------------------
 
-_TTB_REQUIRED_FIELDS = (
-    "brand_name", "class_type", "alcohol_content",
-    "net_contents", "producer_name_address", "government_warning",
-)
+from app.services.compliance import check_compliance as _check_compliance
 
 
 def _compliance_violations(extracted: dict) -> list[str]:
-    """Return human-readable list of missing/invalid required fields, [] if compliant."""
-    violations = []
-    for field in _TTB_REQUIRED_FIELDS:
-        if _is_blank(extracted.get(field)):
-            violations.append(f"{field} missing")
-    gw = extracted.get("government_warning")
-    if gw is not None and gw != "GOVERNMENT WARNING":
-        violations.append(f"government_warning malformed: {gw!r}")
-    # Wine-specific: a sulfite declaration is required (positive or negative).
-    class_type = (extracted.get("class_type") or "").strip().lower()
-    if class_type == "wine" and _is_blank(extracted.get("contains_sulfites")):
-        violations.append("contains_sulfites missing (required on wine labels)")
-    return violations
+    return [v["message"] for v in _check_compliance(extracted)["violations"]]
 
 
 @pytest.mark.parametrize("folder", _LABEL_FOLDERS, ids=[f.name for f in _LABEL_FOLDERS])
@@ -332,11 +320,16 @@ def test_verify_passes_with_truth_data(api, folder):
     result = resp.json()
 
     if not result["overall_pass"]:
-        failing_details = [
+        form_fail = [
             f"{f['field']}: got '{f.get('extracted_value')}' expected '{f.get('submitted_value')}'"
-            for f in result["fields"] if f["status"] == "fail"
+            for f in result["form_match"]["fields"] if f["status"] == "fail"
         ]
-        pytest.fail(f"{folder.name} — expected overall pass but got failures: " + "; ".join(failing_details))
+        compliance_fail = [v["message"] for v in result["compliance"]["violations"]]
+        pytest.fail(
+            f"{folder.name} — expected overall pass but got "
+            f"form_match failures: [{'; '.join(form_fail)}] "
+            f"compliance violations: [{'; '.join(compliance_fail)}]"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -355,7 +348,7 @@ def test_verify_fails_with_wrong_brand(api):
     resp = _verify(front, back, form_data=form_data)
     assert resp.status_code == 200
     result = resp.json()
-    brand_result = next(r for r in result["fields"] if r["field"] == "brand_name")
+    brand_result = next(r for r in result["form_match"]["fields"] if r["field"] == "brand_name")
     assert brand_result["status"] == "fail", (
         f"Expected brand_name to fail but got: {brand_result['status']}"
     )
@@ -373,7 +366,7 @@ def test_verify_fails_with_wrong_abv(api):
     resp = _verify(front, back, form_data=form_data)
     assert resp.status_code == 200
     result = resp.json()
-    abv_result = next(r for r in result["fields"] if r["field"] == "alcohol_content")
+    abv_result = next(r for r in result["form_match"]["fields"] if r["field"] == "alcohol_content")
     assert abv_result["status"] == "fail", (
         f"Expected alcohol_content to fail but got: {abv_result['status']}"
     )

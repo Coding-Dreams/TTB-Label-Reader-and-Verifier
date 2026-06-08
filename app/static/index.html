@@ -22,13 +22,52 @@
 
       <!-- Left: Image Upload -->
       <div class="bg-white rounded-lg shadow p-5">
-        <h2 class="font-semibold text-gray-700 mb-3">Label Image</h2>
-        <label id="drop-zone"
-          class="flex flex-col items-center justify-center border-2 border-dashed border-gray-300 rounded-lg h-48 cursor-pointer hover:border-blue-400 transition-colors">
-          <span class="text-gray-400 text-sm" id="drop-label">Click or drag image here</span>
-          <input type="file" id="image-input" accept="image/*" class="hidden" />
-        </label>
-        <img id="image-preview" class="mt-3 rounded hidden max-h-48 w-full object-contain" />
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="font-semibold text-gray-700">Label Image(s)</h2>
+          <div class="flex items-center gap-3 text-xs">
+            <label class="flex items-center gap-1 cursor-pointer">
+              <input type="radio" name="upload-mode" value="single" checked class="cursor-pointer" />
+              <span>Single image</span>
+            </label>
+            <label class="flex items-center gap-1 cursor-pointer">
+              <input type="radio" name="upload-mode" value="dual" class="cursor-pointer" />
+              <span>Front + Back</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Single image mode -->
+        <div id="single-mode">
+          <label id="drop-zone-single"
+            class="flex flex-col items-center justify-center border-2 border-dashed border-gray-300 rounded-lg h-48 cursor-pointer hover:border-blue-400 transition-colors">
+            <span class="text-gray-400 text-sm" id="drop-label-single">Click or drag image here</span>
+            <input type="file" id="image-input-single" accept="image/*" class="hidden" />
+          </label>
+          <img id="image-preview-single" class="mt-3 rounded hidden max-h-48 w-full object-contain" />
+        </div>
+
+        <!-- Dual image mode -->
+        <div id="dual-mode" class="hidden">
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label id="drop-zone-front"
+                class="flex flex-col items-center justify-center border-2 border-dashed border-gray-300 rounded-lg h-32 cursor-pointer hover:border-blue-400 transition-colors text-xs">
+                <span class="text-gray-400" id="drop-label-front">Front label</span>
+                <input type="file" id="image-input-front" accept="image/*" class="hidden" />
+              </label>
+              <img id="image-preview-front" class="mt-2 rounded hidden max-h-32 w-full object-contain" />
+            </div>
+            <div>
+              <label id="drop-zone-back"
+                class="flex flex-col items-center justify-center border-2 border-dashed border-gray-300 rounded-lg h-32 cursor-pointer hover:border-blue-400 transition-colors text-xs">
+                <span class="text-gray-400" id="drop-label-back">Back label</span>
+                <input type="file" id="image-input-back" accept="image/*" class="hidden" />
+              </label>
+              <img id="image-preview-back" class="mt-2 rounded hidden max-h-32 w-full object-contain" />
+            </div>
+          </div>
+        </div>
+
         <button id="extract-btn"
           class="mt-3 w-full bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium py-2 px-4 rounded disabled:opacity-50"
           disabled>
@@ -61,12 +100,12 @@
             <input id="producer_name_address" type="text" class="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
           </div>
           <div>
-            <label class="block text-xs text-gray-500 mb-1">Country of Origin</label>
+            <label class="block text-xs text-gray-500 mb-1">Country of Origin <span class="text-gray-400">(imported only)</span></label>
             <input id="country_of_origin" type="text" class="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
           </div>
           <div>
             <label class="block text-xs text-gray-500 mb-1">Government Warning</label>
-            <textarea id="government_warning" rows="3" class="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"></textarea>
+            <textarea id="government_warning" rows="2" class="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"></textarea>
           </div>
           <div>
             <label class="block text-xs text-gray-500 mb-1">Sulfite Declaration <span class="text-gray-400">(wine only)</span></label>
@@ -84,17 +123,32 @@
     <!-- Results -->
     <div id="results" class="mt-6 hidden bg-white rounded-lg shadow p-5">
       <div id="overall-banner" class="text-lg font-bold mb-4 p-3 rounded"></div>
-      <table class="w-full text-sm">
-        <thead>
-          <tr class="text-left text-gray-500 border-b">
-            <th class="pb-2">Field</th>
-            <th class="pb-2">Status</th>
-            <th class="pb-2">Extracted from Label</th>
-            <th class="pb-2">Submitted Value</th>
-          </tr>
-        </thead>
-        <tbody id="results-body"></tbody>
-      </table>
+
+      <!-- Compliance section -->
+      <div id="compliance-section" class="mb-5">
+        <h3 class="font-semibold text-gray-700 mb-2 flex items-center gap-2">
+          <span>TTB Compliance</span>
+          <span id="compliance-badge" class="text-xs px-2 py-0.5 rounded font-normal"></span>
+        </h3>
+        <ul id="compliance-violations" class="list-disc list-inside text-sm text-red-700 space-y-1"></ul>
+        <p id="compliance-ok" class="text-sm text-green-700 hidden">All TTB-required fields present and well-formed.</p>
+      </div>
+
+      <!-- Form-match table -->
+      <div>
+        <h3 class="font-semibold text-gray-700 mb-2">Application vs. Label</h3>
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-left text-gray-500 border-b">
+              <th class="pb-2">Field</th>
+              <th class="pb-2">Status</th>
+              <th class="pb-2">Extracted from Label</th>
+              <th class="pb-2">Submitted Value</th>
+            </tr>
+          </thead>
+          <tbody id="results-body"></tbody>
+        </table>
+      </div>
     </div>
 
     <div id="error-msg" class="mt-4 hidden text-red-600 bg-red-50 border border-red-200 rounded p-3 text-sm"></div>
@@ -114,32 +168,73 @@
     };
     const STATUS_ICON = { pass: '✓', fail: '✗', warn: '⚠', not_detected: '—' };
 
-    let selectedFile = null;
+    // ---------- Image upload state ----------
+    let mode = 'single';   // 'single' | 'dual'
+    let singleFile = null;
+    let frontFile = null;
+    let backFile = null;
 
-    document.getElementById('drop-zone').addEventListener('click', () => {
-      document.getElementById('image-input').click();
+    function wireDropzone(zoneId, inputId, labelId, previewId, onPick) {
+      const zone = document.getElementById(zoneId);
+      const input = document.getElementById(inputId);
+      const label = document.getElementById(labelId);
+      const preview = document.getElementById(previewId);
+      zone.addEventListener('click', () => input.click());
+      input.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        label.textContent = file.name;
+        preview.src = URL.createObjectURL(file);
+        preview.classList.remove('hidden');
+        onPick(file);
+      });
+    }
+
+    wireDropzone('drop-zone-single', 'image-input-single', 'drop-label-single', 'image-preview-single',
+      f => { singleFile = f; refreshButtons(); });
+    wireDropzone('drop-zone-front', 'image-input-front', 'drop-label-front', 'image-preview-front',
+      f => { frontFile = f; refreshButtons(); });
+    wireDropzone('drop-zone-back', 'image-input-back', 'drop-label-back', 'image-preview-back',
+      f => { backFile = f; refreshButtons(); });
+
+    document.querySelectorAll('input[name="upload-mode"]').forEach(el => {
+      el.addEventListener('change', (e) => {
+        mode = e.target.value;
+        document.getElementById('single-mode').classList.toggle('hidden', mode !== 'single');
+        document.getElementById('dual-mode').classList.toggle('hidden', mode !== 'dual');
+        refreshButtons();
+      });
     });
 
-    document.getElementById('image-input').addEventListener('change', (e) => {
-      selectedFile = e.target.files[0];
-      if (!selectedFile) return;
-      document.getElementById('drop-label').textContent = selectedFile.name;
-      const preview = document.getElementById('image-preview');
-      preview.src = URL.createObjectURL(selectedFile);
-      preview.classList.remove('hidden');
-      document.getElementById('extract-btn').disabled = false;
-      document.getElementById('verify-btn').disabled = false;
-    });
+    function hasImage() {
+      return mode === 'single' ? !!singleFile : !!frontFile;
+    }
 
+    function refreshButtons() {
+      const enabled = hasImage();
+      document.getElementById('extract-btn').disabled = !enabled;
+      document.getElementById('verify-btn').disabled = !enabled;
+    }
+
+    function buildFormData() {
+      const fd = new FormData();
+      if (mode === 'single') {
+        fd.append('image', singleFile);
+      } else {
+        fd.append('image', frontFile);
+        if (backFile) fd.append('back_image', backFile);
+      }
+      return fd;
+    }
+
+    // ---------- Extract ----------
     document.getElementById('extract-btn').addEventListener('click', async () => {
-      if (!selectedFile) return;
+      if (!hasImage()) return;
       const btn = document.getElementById('extract-btn');
       btn.textContent = 'Extracting...';
       btn.disabled = true;
-      const fd = new FormData();
-      fd.append('image', selectedFile);
       try {
-        const res = await fetch('/extract', { method: 'POST', body: fd });
+        const res = await fetch('/extract', { method: 'POST', body: buildFormData() });
         if (!res.ok) throw new Error((await res.json()).detail);
         const data = await res.json();
         FIELDS.forEach(f => {
@@ -149,46 +244,76 @@
         showError(err.message);
       } finally {
         btn.textContent = 'Extract from Image';
-        btn.disabled = false;
+        btn.disabled = !hasImage();
       }
     });
 
+    // ---------- Verify ----------
     document.getElementById('verify-btn').addEventListener('click', async () => {
-      if (!selectedFile) return;
+      if (!hasImage()) return;
       const btn = document.getElementById('verify-btn');
       btn.textContent = 'Verifying...';
       btn.disabled = true;
       document.getElementById('error-msg').classList.add('hidden');
       document.getElementById('results').classList.add('hidden');
 
-      const fd = new FormData();
-      fd.append('image', selectedFile);
+      const fd = buildFormData();
       FIELDS.forEach(f => fd.append(f, document.getElementById(f).value));
 
       try {
         const res = await fetch('/verify', { method: 'POST', body: fd });
         if (!res.ok) throw new Error((await res.json()).detail);
-        const data = await res.json();
-        renderResults(data);
+        renderResults(await res.json());
       } catch (err) {
         showError(err.message);
       } finally {
         btn.textContent = 'Verify Label';
-        btn.disabled = false;
+        btn.disabled = !hasImage();
       }
     });
 
+    // ---------- Render ----------
     function renderResults(data) {
       const banner = document.getElementById('overall-banner');
+      const compliantOK = data.compliance.compliant;
+      const matchOK = data.form_match.overall_pass;
+
       if (data.overall_pass) {
-        banner.textContent = '✓ APPROVED — All fields match';
+        banner.textContent = '✓ APPROVED — Application matches label and label is TTB compliant';
         banner.className = 'text-lg font-bold mb-4 p-3 rounded bg-green-50 text-green-700';
       } else {
-        banner.textContent = '✗ REJECTED — One or more fields failed';
+        const reasons = [];
+        if (!matchOK) reasons.push('application data does not match label');
+        if (!compliantOK) reasons.push('label is not TTB compliant');
+        banner.textContent = '✗ REJECTED — ' + reasons.join(', ');
         banner.className = 'text-lg font-bold mb-4 p-3 rounded bg-red-50 text-red-700';
       }
+
+      // Compliance section
+      const violations = data.compliance.violations;
+      const ul = document.getElementById('compliance-violations');
+      const ok = document.getElementById('compliance-ok');
+      const badge = document.getElementById('compliance-badge');
+      if (compliantOK) {
+        badge.textContent = 'COMPLIANT';
+        badge.className = 'text-xs px-2 py-0.5 rounded font-normal bg-green-100 text-green-700';
+        ul.innerHTML = '';
+        ok.classList.remove('hidden');
+        // Mark the corresponding inputs as clean
+        FIELDS.forEach(f => markField(f, false));
+      } else {
+        badge.textContent = `${violations.length} VIOLATION${violations.length === 1 ? '' : 'S'}`;
+        badge.className = 'text-xs px-2 py-0.5 rounded font-normal bg-red-100 text-red-700';
+        ul.innerHTML = violations.map(v => `<li><strong>${v.label}:</strong> ${v.message}</li>`).join('');
+        ok.classList.add('hidden');
+        // Flag the offending inputs red
+        FIELDS.forEach(f => markField(f, false));
+        violations.forEach(v => markField(v.field, true));
+      }
+
+      // Form-match table
       const tbody = document.getElementById('results-body');
-      tbody.innerHTML = data.fields.map(f => `
+      tbody.innerHTML = data.form_match.fields.map(f => `
         <tr class="border-b last:border-0">
           <td class="py-2 text-gray-700">${FIELD_LABELS[f.field] || f.field}</td>
           <td class="py-2 ${STATUS_STYLE[f.status]}">${STATUS_ICON[f.status]} ${f.status.replace('_', ' ')}</td>
@@ -196,6 +321,13 @@
           <td class="py-2 text-gray-600 text-xs max-w-xs truncate">${f.submitted_value ?? '—'}</td>
         </tr>`).join('');
       document.getElementById('results').classList.remove('hidden');
+    }
+
+    function markField(field, isViolation) {
+      const el = document.getElementById(field);
+      if (!el) return;
+      el.classList.toggle('border-red-400', isViolation);
+      el.classList.toggle('bg-red-50', isViolation);
     }
 
     function showError(msg) {
