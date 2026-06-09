@@ -39,6 +39,7 @@ async def extract(
         debug_info: Optional[dict] = {} if verbose else None
         fields = await extract_label_fields(tmp, tmp_back, debug_info=debug_info)
         result = fields.model_dump()
+        result["compliance"] = check_compliance(result)
         if verbose and debug_info is not None:
             result["_debug"] = debug_info
         return result
