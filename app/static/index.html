@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>TTB Label Verification</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    textarea.auto-resize { overflow: hidden; resize: none; }
+  </style>
 </head>
 <body class="bg-gray-50 min-h-screen">
 
@@ -38,32 +41,35 @@
 
         <!-- Single image mode -->
         <div id="single-mode">
-          <label id="drop-zone-single"
+          <div id="drop-zone-single"
             class="flex flex-col items-center justify-center border-2 border-dashed border-gray-300 rounded-lg h-48 cursor-pointer hover:border-blue-400 transition-colors">
-            <span class="text-gray-400 text-sm" id="drop-label-single">Click or drag image here</span>
+            <span class="text-gray-400 text-sm select-none" id="drop-label-single">Click or drag image here</span>
             <input type="file" id="image-input-single" accept="image/*" class="hidden" />
-          </label>
-          <img id="image-preview-single" class="mt-3 rounded hidden max-h-48 w-full object-contain" />
+          </div>
+          <img id="image-preview-single" class="mt-3 rounded hidden max-h-48 w-full object-contain cursor-zoom-in"
+               title="Click to enlarge" onclick="openModal(this.src)" />
         </div>
 
         <!-- Dual image mode -->
         <div id="dual-mode" class="hidden">
           <div class="grid grid-cols-2 gap-3">
             <div>
-              <label id="drop-zone-front"
+              <div id="drop-zone-front"
                 class="flex flex-col items-center justify-center border-2 border-dashed border-gray-300 rounded-lg h-32 cursor-pointer hover:border-blue-400 transition-colors text-xs">
-                <span class="text-gray-400" id="drop-label-front">Front label</span>
+                <span class="text-gray-400 select-none" id="drop-label-front">Front label</span>
                 <input type="file" id="image-input-front" accept="image/*" class="hidden" />
-              </label>
-              <img id="image-preview-front" class="mt-2 rounded hidden max-h-32 w-full object-contain" />
+              </div>
+              <img id="image-preview-front" class="mt-2 rounded hidden max-h-32 w-full object-contain cursor-zoom-in"
+                   title="Click to enlarge" onclick="openModal(this.src)" />
             </div>
             <div>
-              <label id="drop-zone-back"
+              <div id="drop-zone-back"
                 class="flex flex-col items-center justify-center border-2 border-dashed border-gray-300 rounded-lg h-32 cursor-pointer hover:border-blue-400 transition-colors text-xs">
-                <span class="text-gray-400" id="drop-label-back">Back label</span>
+                <span class="text-gray-400 select-none" id="drop-label-back">Back label</span>
                 <input type="file" id="image-input-back" accept="image/*" class="hidden" />
-              </label>
-              <img id="image-preview-back" class="mt-2 rounded hidden max-h-32 w-full object-contain" />
+              </div>
+              <img id="image-preview-back" class="mt-2 rounded hidden max-h-32 w-full object-contain cursor-zoom-in"
+                   title="Click to enlarge" onclick="openModal(this.src)" />
             </div>
           </div>
         </div>
@@ -97,7 +103,8 @@
           </div>
           <div>
             <label class="block text-xs text-gray-500 mb-1">Producer Name &amp; Address</label>
-            <input id="producer_name_address" type="text" class="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+            <textarea id="producer_name_address"
+              class="auto-resize w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"></textarea>
           </div>
           <div>
             <label class="block text-xs text-gray-500 mb-1">Country of Origin <span class="text-gray-400">(imported only)</span></label>
@@ -105,7 +112,8 @@
           </div>
           <div>
             <label class="block text-xs text-gray-500 mb-1">Government Warning</label>
-            <textarea id="government_warning" rows="2" class="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"></textarea>
+            <textarea id="government_warning"
+              class="auto-resize w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"></textarea>
           </div>
           <div>
             <label class="block text-xs text-gray-500 mb-1">Sulfite Declaration <span class="text-gray-400">(wine only)</span></label>
@@ -154,6 +162,13 @@
     <div id="error-msg" class="mt-4 hidden text-red-600 bg-red-50 border border-red-200 rounded p-3 text-sm"></div>
   </main>
 
+  <!-- Image zoom modal -->
+  <div id="img-modal" class="hidden fixed inset-0 bg-black/75 z-50 flex items-center justify-center cursor-zoom-out"
+       onclick="closeModal()">
+    <img id="modal-img" class="max-w-[90vw] max-h-[90vh] object-contain rounded shadow-2xl"
+         onclick="event.stopPropagation()" />
+  </div>
+
   <script>
     const FIELDS = ['brand_name','class_type','alcohol_content','net_contents','producer_name_address','country_of_origin','government_warning','contains_sulfites'];
     const FIELD_LABELS = {
@@ -168,25 +183,73 @@
     };
     const STATUS_ICON = { pass: '✓', fail: '✗', warn: '⚠', not_detected: '—' };
 
+    // ---------- Auto-resize textareas ----------
+    function autoResize(el) {
+      el.style.height = 'auto';
+      el.style.height = el.scrollHeight + 'px';
+    }
+    document.querySelectorAll('textarea.auto-resize').forEach(el => {
+      el.addEventListener('input', () => autoResize(el));
+    });
+
+    // Set a field value and auto-resize if it's a textarea
+    function setFieldValue(id, value) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.value = value || '';
+      if (el.classList.contains('auto-resize')) autoResize(el);
+    }
+
+    // ---------- Image zoom modal ----------
+    function openModal(src) {
+      document.getElementById('modal-img').src = src;
+      document.getElementById('img-modal').classList.remove('hidden');
+    }
+    function closeModal() {
+      document.getElementById('img-modal').classList.add('hidden');
+    }
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+
     // ---------- Image upload state ----------
-    let mode = 'single';   // 'single' | 'dual'
+    let mode = 'single';
     let singleFile = null;
     let frontFile = null;
     let backFile = null;
 
     function wireDropzone(zoneId, inputId, labelId, previewId, onPick) {
-      const zone = document.getElementById(zoneId);
+      const zone  = document.getElementById(zoneId);
       const input = document.getElementById(inputId);
       const label = document.getElementById(labelId);
       const preview = document.getElementById(previewId);
-      zone.addEventListener('click', () => input.click());
-      input.addEventListener('change', (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
+
+      function pickFile(file) {
         label.textContent = file.name;
         preview.src = URL.createObjectURL(file);
         preview.classList.remove('hidden');
         onPick(file);
+      }
+
+      // Click to open file picker
+      zone.addEventListener('click', () => input.click());
+      input.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (file) pickFile(file);
+      });
+
+      // Drag-and-drop
+      zone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+        zone.classList.add('border-blue-400', 'bg-blue-50');
+      });
+      zone.addEventListener('dragleave', () => {
+        zone.classList.remove('border-blue-400', 'bg-blue-50');
+      });
+      zone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        zone.classList.remove('border-blue-400', 'bg-blue-50');
+        const file = e.dataTransfer.files[0];
+        if (file && file.type.startsWith('image/')) pickFile(file);
       });
     }
 
@@ -209,13 +272,11 @@
     function hasImage() {
       return mode === 'single' ? !!singleFile : !!frontFile;
     }
-
     function refreshButtons() {
       const enabled = hasImage();
       document.getElementById('extract-btn').disabled = !enabled;
       document.getElementById('verify-btn').disabled = !enabled;
     }
-
     function buildFormData() {
       const fd = new FormData();
       if (mode === 'single') {
@@ -227,18 +288,36 @@
       return fd;
     }
 
+    // ---------- Field helpers ----------
+    function clearFields() {
+      FIELDS.forEach(f => {
+        setFieldValue(f, '');
+        markField(f, false);
+      });
+    }
+    function resetHighlights() {
+      FIELDS.forEach(f => markField(f, false));
+    }
+
     // ---------- Extract ----------
     document.getElementById('extract-btn').addEventListener('click', async () => {
       if (!hasImage()) return;
       const btn = document.getElementById('extract-btn');
       btn.textContent = 'Extracting...';
       btn.disabled = true;
+      clearFields();
       try {
         const res = await fetch('/extract', { method: 'POST', body: buildFormData() });
         if (!res.ok) throw new Error((await res.json()).detail);
         const data = await res.json();
         FIELDS.forEach(f => {
-          if (data[f]) document.getElementById(f).value = data[f];
+          if (data[f]) {
+            setFieldValue(f, data[f]);
+            markField(f, false);
+          } else {
+            // Highlight fields the model couldn't extract so the user knows to fill them
+            markField(f, true);
+          }
         });
       } catch (err) {
         showError(err.message);
@@ -256,6 +335,8 @@
       btn.disabled = true;
       document.getElementById('error-msg').classList.add('hidden');
       document.getElementById('results').classList.add('hidden');
+      // Clear field values and highlights so results reflect the current image fresh
+      clearFields();
 
       const fd = buildFormData();
       FIELDS.forEach(f => fd.append(f, document.getElementById(f).value));
@@ -263,7 +344,12 @@
       try {
         const res = await fetch('/verify', { method: 'POST', body: fd });
         if (!res.ok) throw new Error((await res.json()).detail);
-        renderResults(await res.json());
+        const data = await res.json();
+        // Populate form fields with what was extracted from the label
+        (data.form_match.fields || []).forEach(f => {
+          if (f.extracted_value) setFieldValue(f.field, f.extracted_value);
+        });
+        renderResults(data);
       } catch (err) {
         showError(err.message);
       } finally {
@@ -291,23 +377,21 @@
 
       // Compliance section
       const violations = data.compliance.violations;
-      const ul = document.getElementById('compliance-violations');
-      const ok = document.getElementById('compliance-ok');
+      const ul   = document.getElementById('compliance-violations');
+      const ok   = document.getElementById('compliance-ok');
       const badge = document.getElementById('compliance-badge');
       if (compliantOK) {
         badge.textContent = 'COMPLIANT';
         badge.className = 'text-xs px-2 py-0.5 rounded font-normal bg-green-100 text-green-700';
         ul.innerHTML = '';
         ok.classList.remove('hidden');
-        // Mark the corresponding inputs as clean
-        FIELDS.forEach(f => markField(f, false));
+        resetHighlights();
       } else {
         badge.textContent = `${violations.length} VIOLATION${violations.length === 1 ? '' : 'S'}`;
         badge.className = 'text-xs px-2 py-0.5 rounded font-normal bg-red-100 text-red-700';
         ul.innerHTML = violations.map(v => `<li><strong>${v.label}:</strong> ${v.message}</li>`).join('');
         ok.classList.add('hidden');
-        // Flag the offending inputs red
-        FIELDS.forEach(f => markField(f, false));
+        resetHighlights();
         violations.forEach(v => markField(v.field, true));
       }
 

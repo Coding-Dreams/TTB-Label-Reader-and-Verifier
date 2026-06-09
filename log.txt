@@ -1,3 +1,18 @@
+Running integration tests...
+/usr/local/lib/python3.11/site-packages/pytest_asyncio/plugin.py:208: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+============================================================================================================ test session starts =============================================================================================================
+platform linux -- Python 3.11.15, pytest-8.3.0, pluggy-1.6.0 -- /usr/local/bin/python3.11
+cachedir: .pytest_cache
+rootdir: /app
+configfile: pytest.ini
+plugins: anyio-4.13.0, asyncio-0.24.0
+asyncio: mode=Mode.STRICT, default_loop_scope=None
+collected 105 items
+
+tests/test_integration.py::test_extract_fields[COLA1]
 ????????????????????????????????????????????????????????????????????????
   COLA1  ·  PIPELINE TRACE
 ????????????????????????????????????????????????????????????????????????
@@ -43,7 +58,8 @@ tests/test_integration.py::test_extract_fields[COLA10]
   country_of_origin            'United States'
   contains_sulfites            None
 
-?? [2] After postprocess ? no changes ??
+?? [2] After postprocess (changed fields) ??
+  country_of_origin            None  ?  was 'United States'
 
 ?? [3] Secondary passes ??
   sulfites                     raw='none'  ?  accepted=None
@@ -56,10 +72,10 @@ tests/test_integration.py::test_extract_fields[COLA10]
   alcohol_content              '61% ALC/VOL (122 PROOF)'
   net_contents                 '750 mL'
   producer_name_address        'TOMMYROTTER DISTILLERY, BUFFALO, NEW YORK'
-  country_of_origin            'United States'
+  country_of_origin            None
   contains_sulfites            None
 
-FAILED
+PASSED
 tests/test_integration.py::test_extract_fields[COLA11]
 ????????????????????????????????????????????????????????????????????????
   COLA11  ·  PIPELINE TRACE
@@ -75,7 +91,8 @@ tests/test_integration.py::test_extract_fields[COLA11]
   country_of_origin            'Indiana'
   contains_sulfites            None
 
-?? [2] After postprocess ? no changes ??
+?? [2] After postprocess (changed fields) ??
+  country_of_origin            None  ?  was 'Indiana'
 
 ?? [3] Secondary passes ??
   sulfites                     raw='none'  ?  accepted=None
@@ -88,10 +105,10 @@ tests/test_integration.py::test_extract_fields[COLA11]
   alcohol_content              '47.5% ALC/VOL (95 PROOF)'
   net_contents                 '750 mL'
   producer_name_address        'TOMMYROTTER DISTILLERY BUFFALO, NEW YORK'
-  country_of_origin            'Indiana'
+  country_of_origin            None
   contains_sulfites            None
 
-FAILED
+PASSED
 tests/test_integration.py::test_extract_fields[COLA12]
 ????????????????????????????????????????????????????????????????????????
   COLA12  ·  PIPELINE TRACE
@@ -140,7 +157,8 @@ tests/test_integration.py::test_extract_fields[COLA13]
   country_of_origin            'USA'
   contains_sulfites            None
 
-?? [2] After postprocess ? no changes ??
+?? [2] After postprocess (changed fields) ??
+  country_of_origin            None  ?  was 'USA'
 
 ?? [3] Secondary passes ??
   sulfites                     raw='none'  ?  accepted=None
@@ -153,10 +171,10 @@ tests/test_integration.py::test_extract_fields[COLA13]
   alcohol_content              '29% BY VOL / 42 PROOF'
   net_contents                 '750 ML'
   producer_name_address        'LIST DISTILLERY LLC, FLORIDA'
-  country_of_origin            'USA'
+  country_of_origin            None
   contains_sulfites            None
 
-FAILED
+PASSED
 tests/test_integration.py::test_extract_fields[COLA14]
 ????????????????????????????????????????????????????????????????????????
   COLA14  ·  PIPELINE TRACE
@@ -235,7 +253,7 @@ tests/test_integration.py::test_extract_fields[COLA16]
   contains_sulfites            'CONTAINS SULFITES'
 
 ?? [2] After postprocess (changed fields) ??
-  country_of_origin            'the USA'  ?  was 'Product of the USA'
+  country_of_origin            None  ?  was 'Product of the USA'
 
 ?? [3] Secondary passes ??
   class_type                   raw='Wine'  ?  accepted='Wine'
@@ -247,10 +265,10 @@ tests/test_integration.py::test_extract_fields[COLA16]
   alcohol_content              '8% ALC/VOL'
   net_contents                 '375 mL (12.7 FL. OZ.)'
   producer_name_address        'BIG EASY BLENDS, LLC, KENNER, LOUISIANA'
-  country_of_origin            'the USA'
+  country_of_origin            None
   contains_sulfites            'CONTAINS SULFITES'
 
-FAILED
+PASSED
 tests/test_integration.py::test_extract_fields[COLA17]
 ????????????????????????????????????????????????????????????????????????
   COLA17  ·  PIPELINE TRACE
@@ -264,14 +282,15 @@ tests/test_integration.py::test_extract_fields[COLA17]
   producer_name_address        None
   us_importer                  None
   country_of_origin            None
-  contains_sulfites            'CONTAINS SULFITES'
+  contains_sulfites            None
 
 ?? [2] After postprocess ? no changes ??
 
 ?? [3] Secondary passes ??
+  sulfites                     raw='none'  ?  accepted=None
   class_type                   raw='Distilled Spirits'  ?  accepted='Distilled Spirits'
   net_contents                 raw='100 mL'  ?  accepted='100 mL'
-  producer_name_address        raw='none'  ?  accepted=None
+  producer_name_address        raw='PRODUCED & PACKAGED BY CD FLVNT MIX SELECTIONS, NEW ORLEANS, LOUISIANA 70123'  ?  accepted='PRODUCED & PACKAGED BY CD FLVNT MIX SELECTIONS, NEW ORLEANS, LOUISIANA 70123'
   government_warning           raw='GOVERNMENT WARNING'  ?  accepted='GOVERNMENT WARNING'
 
 ?? [4] Final extracted fields ??
@@ -279,11 +298,11 @@ tests/test_integration.py::test_extract_fields[COLA17]
   class_type                   'Distilled Spirits'
   alcohol_content              '8% ALC/VOL'
   net_contents                 '100 mL'
-  producer_name_address        None
+  producer_name_address        'CD FLVNT MIX SELECTIONS, NEW ORLEANS, LOUISIANA 70123'
   country_of_origin            None
-  contains_sulfites            'CONTAINS SULFITES'
+  contains_sulfites            None
 
-FAILED
+PASSED
 tests/test_integration.py::test_extract_fields[COLA18]
 ????????????????????????????????????????????????????????????????????????
   COLA18  ·  PIPELINE TRACE
@@ -297,39 +316,6 @@ tests/test_integration.py::test_extract_fields[COLA18]
   producer_name_address        None
   us_importer                  None
   country_of_origin            None
-  contains_sulfites            'CONTAINS SULFITES'
-
-?? [2] After postprocess ? no changes ??
-
-?? [3] Secondary passes ??
-  class_type                   raw='Distilled Spirits'  ?  accepted='Distilled Spirits'
-  net_contents                 raw='100 mL'  ?  accepted='100 mL'
-  producer_name_address        raw='none'  ?  accepted=None
-  government_warning           raw='GOVERNMENT WARNING'  ?  accepted='GOVERNMENT WARNING'
-
-?? [4] Final extracted fields ??
-  brand_name                   'KIRKLAND'
-  class_type                   'Distilled Spirits'
-  alcohol_content              '8% ALC/VOL'
-  net_contents                 '100 mL'
-  producer_name_address        None
-  country_of_origin            None
-  contains_sulfites            'CONTAINS SULFITES'
-
-FAILED
-tests/test_integration.py::test_extract_fields[COLA19]
-????????????????????????????????????????????????????????????????????????
-  COLA19  ·  PIPELINE TRACE
-????????????????????????????????????????????????????????????????????????
-
-?? [1] Main model output ??
-  brand_name                   "Drake's Organic Spiked Ice"
-  class_type                   'Distilled Spirits'
-  alcohol_content              '15% ALC/VOL'
-  net_contents                 '100ML'
-  producer_name_address        "Drake's Organic Spirits, New Orleans LA"
-  us_importer                  None
-  country_of_origin            'USA'
   contains_sulfites            None
 
 ?? [2] After postprocess ? no changes ??
@@ -337,19 +323,53 @@ tests/test_integration.py::test_extract_fields[COLA19]
 ?? [3] Secondary passes ??
   sulfites                     raw='none'  ?  accepted=None
   class_type                   raw='Distilled Spirits'  ?  accepted='Distilled Spirits'
-  us_importer                  raw=None  ?  accepted=None
+  net_contents                 raw='100 mL'  ?  accepted='100 mL'
+  producer_name_address        raw='PRODUCED & PACKAGED BY OC FRUIT MW SELECTIONS, NEW ORLEANS, LOUISIANA 70123'  ?  accepted='PRODUCED & PACKAGED BY OC FRUIT MW SELECTIONS, NEW ORLEANS, LOUISIANA 70123'
   government_warning           raw='GOVERNMENT WARNING'  ?  accepted='GOVERNMENT WARNING'
 
 ?? [4] Final extracted fields ??
-  brand_name                   "Drake's Organic Spiked Ice"
+  brand_name                   'KIRKLAND'
+  class_type                   'Distilled Spirits'
+  alcohol_content              '8% ALC/VOL'
+  net_contents                 '100 mL'
+  producer_name_address        'OC FRUIT MW SELECTIONS, NEW ORLEANS, LOUISIANA 70123'
+  country_of_origin            None
+  contains_sulfites            None
+
+PASSED
+tests/test_integration.py::test_extract_fields[COLA19]
+????????????????????????????????????????????????????????????????????????
+  COLA19  ·  PIPELINE TRACE
+????????????????????????????????????????????????????????????????????????
+
+?? [1] Main model output ??
+  brand_name                   "Drake's"
   class_type                   'Distilled Spirits'
   alcohol_content              '15% ALC/VOL'
   net_contents                 '100ML'
-  producer_name_address        "Drake's Organic Spirits, New Orleans LA"
+  producer_name_address        "Drake's Organic Spirits, New Orleans, LA"
+  us_importer                  None
   country_of_origin            'USA'
   contains_sulfites            None
 
-FAILED
+?? [2] After postprocess (changed fields) ??
+  country_of_origin            None  ?  was 'USA'
+
+?? [3] Secondary passes ??
+  sulfites                     raw='none'  ?  accepted=None
+  class_type                   raw='Distilled Spirits'  ?  accepted='Distilled Spirits'
+  government_warning           raw='GOVERNMENT WARNING'  ?  accepted='GOVERNMENT WARNING'
+
+?? [4] Final extracted fields ??
+  brand_name                   "Drake's"
+  class_type                   'Distilled Spirits'
+  alcohol_content              '15% ALC/VOL'
+  net_contents                 '100ML'
+  producer_name_address        "Drake's Organic Spirits, New Orleans, LA"
+  country_of_origin            None
+  contains_sulfites            None
+
+PASSED
 tests/test_integration.py::test_extract_fields[COLA2]
 ????????????????????????????????????????????????????????????????????????
   COLA2  ·  PIPELINE TRACE
@@ -358,7 +378,7 @@ tests/test_integration.py::test_extract_fields[COLA2]
 ?? [1] Main model output ??
   brand_name                   'Lenz Moser Fête Rosé'
   class_type                   'Wine'
-  alcohol_content              '12% ALC./VOL.'
+  alcohol_content              '12% ALC/VOL'
   net_contents                 '750ML'
   producer_name_address        'WEINKELLEREI LENZ MOSER AG; A-3495 ROHRENDORF, AUSTRIA'
   us_importer                  'IMPORTED BY: NICHE W. & S., CEDAR KNOLLS, NJ www.ourniche.com'
@@ -376,7 +396,7 @@ tests/test_integration.py::test_extract_fields[COLA2]
 ?? [4] Final extracted fields ??
   brand_name                   'Lenz Moser Fête Rosé'
   class_type                   'Wine'
-  alcohol_content              '12% ALC./VOL.'
+  alcohol_content              '12% ALC/VOL'
   net_contents                 '750ML'
   producer_name_address        'NICHE W. & S., CEDAR KNOLLS, NJ'
   country_of_origin            'Austria'
@@ -461,7 +481,7 @@ tests/test_integration.py::test_extract_fields[COLA22]
   class_type                   'Wine'
   alcohol_content              '12.5% alc. by Vol.'
   net_contents                 '750ml'
-  producer_name_address        'ILVERRO, TERRE DEL VOLTOURNO INDICAZIONE GEOGRAFICA PROTETTA'
+  producer_name_address        'Il Verro s.r.l., Società Agricola - presso la cantina di Romnicola (CE) Sede ?'
   us_importer                  None
   country_of_origin            'Italy'
   contains_sulfites            'Contains sulfites'
@@ -478,7 +498,7 @@ tests/test_integration.py::test_extract_fields[COLA22]
   class_type                   'Wine'
   alcohol_content              '12.5% alc. by Vol.'
   net_contents                 '750ml'
-  producer_name_address        'ILVERRO, TERRE DEL VOLTOURNO INDICAZIONE GEOGRAFICA PROTETTA'
+  producer_name_address        'Il Verro s.r.l., Società Agricola - presso la cantina di Romnicola (CE) Sede ?'
   country_of_origin            'Italy'
   contains_sulfites            'Contains sulfites'
 
@@ -498,7 +518,8 @@ tests/test_integration.py::test_extract_fields[COLA23]
   country_of_origin            'United States'
   contains_sulfites            None
 
-?? [2] After postprocess ? no changes ??
+?? [2] After postprocess (changed fields) ??
+  country_of_origin            None  ?  was 'United States'
 
 ?? [3] Secondary passes ??
   sulfites                     raw='none'  ?  accepted=None
@@ -512,10 +533,10 @@ tests/test_integration.py::test_extract_fields[COLA23]
   alcohol_content              '40% ALC./VOL. (80 PROOF)'
   net_contents                 '750 ML'
   producer_name_address        'WESTMONT LTD., MIRA LOMA, CA 91752'
-  country_of_origin            'United States'
+  country_of_origin            None
   contains_sulfites            None
 
-FAILED
+PASSED
 tests/test_integration.py::test_extract_fields[COLA24]
 ????????????????????????????????????????????????????????????????????????
   COLA24  ·  PIPELINE TRACE
@@ -526,19 +547,17 @@ tests/test_integration.py::test_extract_fields[COLA24]
   class_type                   'Wine'
   alcohol_content              None
   net_contents                 None
-  producer_name_address        'C.B.S.A. ESTADO 3594 SANTAGA, CHILE'
-  us_importer                  'DANGEROUS WINE GROUP LLC CLIFTON PARK NY'
+  producer_name_address        'DANGEROUS WINE GROUP LLC, CLIFTON PARK, NY'
+  us_importer                  'IMPORTED BY: DANGEROUS WINE GROUP LLC, CLIFTON PARK, NY'
   country_of_origin            'CHILE'
   contains_sulfites            'CONTAINS SULFITES'
 
 ?? [2] After postprocess (changed fields) ??
-  producer_name_address        'DANGEROUS WINE GROUP LLC CLIFTON PARK NY'  ?  was 'C.B.S.A. ESTADO 3594 SANTAGA, CHILE'
-  us_importer                  None  ?  was 'DANGEROUS WINE GROUP LLC CLIFTON PARK NY'
+  us_importer                  None  ?  was 'IMPORTED BY: DANGEROUS WINE GROUP LLC, CLIFTON PARK, NY'
 
 ?? [3] Secondary passes ??
   class_type                   raw='Wine'  ?  accepted='Wine'
   net_contents                 raw='none'  ?  accepted=None
-  us_importer                  raw=None  ?  accepted=None
   government_warning           raw='GOVERNMENT WARNING'  ?  accepted='GOVERNMENT WARNING'
 
 ?? [4] Final extracted fields ??
@@ -546,7 +565,7 @@ tests/test_integration.py::test_extract_fields[COLA24]
   class_type                   'Wine'
   alcohol_content              None
   net_contents                 None
-  producer_name_address        'DANGEROUS WINE GROUP LLC CLIFTON PARK NY'
+  producer_name_address        'DANGEROUS WINE GROUP LLC, CLIFTON PARK, NY'
   country_of_origin            'CHILE'
   contains_sulfites            'CONTAINS SULFITES'
 
@@ -559,7 +578,7 @@ tests/test_integration.py::test_extract_fields[COLA25]
 ?? [1] Main model output ??
   brand_name                   'Sottano'
   class_type                   'Wine'
-  alcohol_content              '13.5%'
+  alcohol_content              '13.5% by Vol.'
   net_contents                 '750 ML'
   producer_name_address        'BODEGA SOTTANO S.A., B-73014 PERDRIEL, EXPORT B 87804, LUJAN DE CUYO, MENDOZA?'
   us_importer                  None
@@ -576,7 +595,7 @@ tests/test_integration.py::test_extract_fields[COLA25]
 ?? [4] Final extracted fields ??
   brand_name                   'Sottano'
   class_type                   'Wine'
-  alcohol_content              '13.5%'
+  alcohol_content              '13.5% by Vol.'
   net_contents                 '750 ML'
   producer_name_address        'BODEGA SOTTANO S.A., B-73014 PERDRIEL, EXPORT B 87804, LUJAN DE CUYO, MENDOZA?'
   country_of_origin            'ARGENTINA'
@@ -593,13 +612,13 @@ tests/test_integration.py::test_extract_fields[COLA26]
   class_type                   'Wine'
   alcohol_content              '14.7% by Vol.'
   net_contents                 '750 ML'
-  producer_name_address        'BODEGA B-73014 VICENTIN FAMILY WINES EXP N° B-87804.'
+  producer_name_address        'BODEGA B-73014 VICENTIN FAMILY WINES EXP N° B-87804'
   us_importer                  'IMPORTED BY: Dangerous Wine Group L.L.C., Washington, D.C. www.dangerouswineg?'
-  country_of_origin            'ARGENTINA'
+  country_of_origin            'Argentina'
   contains_sulfites            'CONTAIN SULFITES'
 
 ?? [2] After postprocess (changed fields) ??
-  producer_name_address        'Dangerous Wine Group L.L.C., Washington, D.C.'  ?  was 'BODEGA B-73014 VICENTIN FAMILY WINES EXP N° B-87804.'
+  producer_name_address        'Dangerous Wine Group L.L.C., Washington, D.C.'  ?  was 'BODEGA B-73014 VICENTIN FAMILY WINES EXP N° B-87804'
   us_importer                  None  ?  was 'IMPORTED BY: Dangerous Wine Group L.L.C., Washington, D.C. www.dangerouswineg?'
 
 ?? [3] Secondary passes ??
@@ -612,7 +631,7 @@ tests/test_integration.py::test_extract_fields[COLA26]
   alcohol_content              '14.7% by Vol.'
   net_contents                 '750 ML'
   producer_name_address        'Dangerous Wine Group L.L.C., Washington, D.C.'
-  country_of_origin            'ARGENTINA'
+  country_of_origin            'Argentina'
   contains_sulfites            'CONTAIN SULFITES'
 
 PASSED
@@ -696,7 +715,8 @@ tests/test_integration.py::test_extract_fields[COLA29]
   country_of_origin            'New Mexico'
   contains_sulfites            None
 
-?? [2] After postprocess ? no changes ??
+?? [2] After postprocess (changed fields) ??
+  country_of_origin            None  ?  was 'New Mexico'
 
 ?? [3] Secondary passes ??
   sulfites                     raw='none'  ?  accepted=None
@@ -709,10 +729,10 @@ tests/test_integration.py::test_extract_fields[COLA29]
   alcohol_content              '46% ALC/VOL'
   net_contents                 '750 mL'
   producer_name_address        'Santa Fe Spirits, Santa Fe, New Mexico'
-  country_of_origin            'New Mexico'
+  country_of_origin            None
   contains_sulfites            None
 
-FAILED
+PASSED
 tests/test_integration.py::test_extract_fields[COLA3]
 ????????????????????????????????????????????????????????????????????????
   COLA3  ·  PIPELINE TRACE
@@ -722,7 +742,7 @@ tests/test_integration.py::test_extract_fields[COLA3]
   brand_name                   'Bärenjäger'
   class_type                   'Distilled Spirits'
   alcohol_content              '35% alc/vol'
-  net_contents                 '50 ML'
+  net_contents                 '50ML'
   producer_name_address        'TEUCKE + KOENIG BÄRENFANGFABRIK RINTELN GERMANY'
   us_importer                  'IMPORTED BY: SIDNEY FRANK IMPORTING CO., INC., NEW ROCHELLE, NY'
   country_of_origin            'Germany'
@@ -741,7 +761,7 @@ tests/test_integration.py::test_extract_fields[COLA3]
   brand_name                   'Bärenjäger'
   class_type                   'Distilled Spirits'
   alcohol_content              '35% alc/vol'
-  net_contents                 '50 ML'
+  net_contents                 '50ML'
   producer_name_address        'SIDNEY FRANK IMPORTING CO., INC., NEW ROCHELLE, NY'
   country_of_origin            'Germany'
   contains_sulfites            None
@@ -758,13 +778,13 @@ tests/test_integration.py::test_extract_fields[COLA30]
   alcohol_content              '30% ALC/VOL (60 PROOF)'
   net_contents                 '750 ML'
   producer_name_address        'W&B OF SWEDEN AB, KUNGSGATAN 37, SE-111 56 STOCKHOLM, SWEDEN'
-  us_importer                  'IMPORTED BY LIGHTNING RIVER, PLLC, 2911 HUNTER MILL ROAD, SUITE 303, OAKTON, ?'
+  us_importer                  'IMPORTED BY: LIGHTNING RIVER, PLLC, 2911 HUNTER MILL ROAD, SUITE 303, OAKTON,?'
   country_of_origin            'Sweden'
   contains_sulfites            None
 
 ?? [2] After postprocess (changed fields) ??
   producer_name_address        'LIGHTNING RIVER, PLLC, 2911 HUNTER MILL ROAD, SUITE 303, OAKTON, VA 22124'  ?  was 'W&B OF SWEDEN AB, KUNGSGATAN 37, SE-111 56 STOCKHOLM, SWEDEN'
-  us_importer                  None  ?  was 'IMPORTED BY LIGHTNING RIVER, PLLC, 2911 HUNTER MILL ROAD, SUITE 303, OAKTON, ?'
+  us_importer                  None  ?  was 'IMPORTED BY: LIGHTNING RIVER, PLLC, 2911 HUNTER MILL ROAD, SUITE 303, OAKTON,?'
 
 ?? [3] Secondary passes ??
   sulfites                     raw='none'  ?  accepted=None
@@ -791,13 +811,13 @@ tests/test_integration.py::test_extract_fields[COLA4]
   class_type                   'Distilled Spirits'
   alcohol_content              '40% ALC/VOL'
   net_contents                 '750 ML'
-  producer_name_address        'H. MOUNIER, MAISON FONDEE EN 1858 COGNAC, FRANCE'
+  producer_name_address        'H. MOUNIER, COGNAC, FRANCE'
   us_importer                  'IMPORTED EXCLUSIVELY BY: SIDNEY FRANK IMPORTING CO., INC., NEW ROCHELLE, NY'
   country_of_origin            'France'
   contains_sulfites            None
 
 ?? [2] After postprocess (changed fields) ??
-  producer_name_address        'SIDNEY FRANK IMPORTING CO., INC., NEW ROCHELLE, NY'  ?  was 'H. MOUNIER, MAISON FONDEE EN 1858 COGNAC, FRANCE'
+  producer_name_address        'SIDNEY FRANK IMPORTING CO., INC., NEW ROCHELLE, NY'  ?  was 'H. MOUNIER, COGNAC, FRANCE'
   us_importer                  None  ?  was 'IMPORTED EXCLUSIVELY BY: SIDNEY FRANK IMPORTING CO., INC., NEW ROCHELLE, NY'
 
 ?? [3] Secondary passes ??
@@ -864,7 +884,8 @@ tests/test_integration.py::test_extract_fields[COLA6]
   country_of_origin            'Tennessee'
   contains_sulfites            None
 
-?? [2] After postprocess ? no changes ??
+?? [2] After postprocess (changed fields) ??
+  country_of_origin            None  ?  was 'Tennessee'
 
 ?? [3] Secondary passes ??
   sulfites                     raw='none'  ?  accepted=None
@@ -877,7 +898,7 @@ tests/test_integration.py::test_extract_fields[COLA6]
   alcohol_content              '41.5% ALC / 83 PROOF'
   net_contents                 '750 ML'
   producer_name_address        'Old Tennessee Distilling Co., Sevierville, Tennessee, USA'
-  country_of_origin            'Tennessee'
+  country_of_origin            None
   contains_sulfites            None
 
 FAILED
@@ -891,18 +912,17 @@ tests/test_integration.py::test_extract_fields[COLA7]
   class_type                   'Wine'
   alcohol_content              '12% BY VOL'
   net_contents                 '750 ML'
-  producer_name_address        'TORTONA ITALIA'
-  us_importer                  'PRUROCK WINES'
+  producer_name_address        'TORTONA ITALIA BOTTLED BY C.V.T. SRL'
+  us_importer                  'IMPORTED BY: PRUROCK WINES, PORTLAND, OR'
   country_of_origin            'Italy'
   contains_sulfites            'CONTAINS SULFITES'
 
 ?? [2] After postprocess (changed fields) ??
-  producer_name_address        'PRUROCK WINES'  ?  was 'TORTONA ITALIA'
-  us_importer                  None  ?  was 'PRUROCK WINES'
+  producer_name_address        'PRUROCK WINES, PORTLAND, OR'  ?  was 'TORTONA ITALIA BOTTLED BY C.V.T. SRL'
+  us_importer                  None  ?  was 'IMPORTED BY: PRUROCK WINES, PORTLAND, OR'
 
 ?? [3] Secondary passes ??
   class_type                   raw='Wine'  ?  accepted='Wine'
-  us_importer                  raw=None  ?  accepted=None
   government_warning           raw='GOVERNMENT WARNING'  ?  accepted='GOVERNMENT WARNING'
 
 ?? [4] Final extracted fields ??
@@ -910,7 +930,7 @@ tests/test_integration.py::test_extract_fields[COLA7]
   class_type                   'Wine'
   alcohol_content              '12% BY VOL'
   net_contents                 '750 ML'
-  producer_name_address        'PRUROCK WINES'
+  producer_name_address        'PRUROCK WINES, PORTLAND, OR'
   country_of_origin            'Italy'
   contains_sulfites            'CONTAINS SULFITES'
 
@@ -921,16 +941,17 @@ tests/test_integration.py::test_extract_fields[COLA8]
 ????????????????????????????????????????????????????????????????????????
 
 ?? [1] Main model output ??
-  brand_name                   'TOMMYROTTER DISTILLERY'
+  brand_name                   'TOMMYROTTER'
   class_type                   'Distilled Spirits'
   alcohol_content              '42% ALC/VOL (84 PROOF)'
   net_contents                 '750 mL'
   producer_name_address        'TOMMYROTTER DISTILLERY, BUFFALO, NEW YORK'
   us_importer                  None
-  country_of_origin            'United States'
+  country_of_origin            'New York State'
   contains_sulfites            None
 
-?? [2] After postprocess ? no changes ??
+?? [2] After postprocess (changed fields) ??
+  country_of_origin            None  ?  was 'New York State'
 
 ?? [3] Secondary passes ??
   sulfites                     raw='none'  ?  accepted=None
@@ -938,15 +959,15 @@ tests/test_integration.py::test_extract_fields[COLA8]
   government_warning           raw='GOVERNMENT WARNING'  ?  accepted='GOVERNMENT WARNING'
 
 ?? [4] Final extracted fields ??
-  brand_name                   'TOMMYROTTER DISTILLERY'
+  brand_name                   'TOMMYROTTER'
   class_type                   'Distilled Spirits'
   alcohol_content              '42% ALC/VOL (84 PROOF)'
   net_contents                 '750 mL'
   producer_name_address        'TOMMYROTTER DISTILLERY, BUFFALO, NEW YORK'
-  country_of_origin            'United States'
+  country_of_origin            None
   contains_sulfites            None
 
-FAILED
+PASSED
 tests/test_integration.py::test_extract_fields[COLA9]
 ????????????????????????????????????????????????????????????????????????
   COLA9  ·  PIPELINE TRACE
@@ -962,7 +983,8 @@ tests/test_integration.py::test_extract_fields[COLA9]
   country_of_origin            'New York'
   contains_sulfites            None
 
-?? [2] After postprocess ? no changes ??
+?? [2] After postprocess (changed fields) ??
+  country_of_origin            None  ?  was 'New York'
 
 ?? [3] Secondary passes ??
   sulfites                     raw='none'  ?  accepted=None
@@ -975,11 +997,42 @@ tests/test_integration.py::test_extract_fields[COLA9]
   alcohol_content              '40% ALC/VOL (80 PROOF)'
   net_contents                 '750 ML'
   producer_name_address        'TOMMYROTTER DISTILLERY, BUFFALO, NEW YORK'
-  country_of_origin            'New York'
+  country_of_origin            None
   contains_sulfites            None
 
 FAILED
-tests/test_integration.py::test_extract_fields[TEST1] FAILED
+tests/test_integration.py::test_extract_fields[TEST1]
+????????????????????????????????????????????????????????????????????????
+  TEST1  ·  PIPELINE TRACE
+????????????????????????????????????????????????????????????????????????
+
+?? [1] Main model output ??
+  brand_name                   'ABC'
+  class_type                   'Distilled Spirits'
+  alcohol_content              '45% ALC/VOL'
+  net_contents                 '750 ML'
+  producer_name_address        'ABC DISTILLERY, FREDERICK, MD'
+  us_importer                  None
+  country_of_origin            None
+  contains_sulfites            None
+
+?? [2] After postprocess ? no changes ??
+
+?? [3] Secondary passes ??
+  sulfites                     raw='none'  ?  accepted=None
+  class_type                   raw='Distilled Spirits'  ?  accepted='Distilled Spirits'
+  government_warning           raw='GOVERNMENT WARNING'  ?  accepted='GOVERNMENT WARNING'
+
+?? [4] Final extracted fields ??
+  brand_name                   'ABC'
+  class_type                   'Distilled Spirits'
+  alcohol_content              '45% ALC/VOL'
+  net_contents                 '750 ML'
+  producer_name_address        'ABC DISTILLERY, FREDERICK, MD'
+  country_of_origin            None
+  contains_sulfites            None
+
+PASSED
 tests/test_integration.py::test_extract_fields[TEST2]
 ????????????????????????????????????????????????????????????????????????
   TEST2  ·  PIPELINE TRACE
@@ -988,14 +1041,15 @@ tests/test_integration.py::test_extract_fields[TEST2]
 ?? [1] Main model output ??
   brand_name                   'ABC WINERY'
   class_type                   'Wine'
-  alcohol_content              'ALC. 13% BY VOL.'
+  alcohol_content              '13% BY VOL.'
   net_contents                 '750 ML'
   producer_name_address        'XYZ CELLARS, CITY, STATE'
   us_importer                  None
   country_of_origin            'United States'
   contains_sulfites            'CONTAINS SULFITES'
 
-?? [2] After postprocess ? no changes ??
+?? [2] After postprocess (changed fields) ??
+  country_of_origin            None  ?  was 'United States'
 
 ?? [3] Secondary passes ??
   class_type                   raw='Wine'  ?  accepted='Wine'
@@ -1005,13 +1059,13 @@ tests/test_integration.py::test_extract_fields[TEST2]
 ?? [4] Final extracted fields ??
   brand_name                   'ABC WINERY'
   class_type                   'Wine'
-  alcohol_content              'ALC. 13% BY VOL.'
+  alcohol_content              '13% BY VOL.'
   net_contents                 '750 ML'
   producer_name_address        'XYZ CELLARS, CITY, STATE'
-  country_of_origin            'United States'
+  country_of_origin            None
   contains_sulfites            'CONTAINS SULFITES'
 
-FAILED
+PASSED
 tests/test_integration.py::test_extract_fields[TEST3]
 ????????????????????????????????????????????????????????????????????????
   TEST3  ·  PIPELINE TRACE
@@ -1058,11 +1112,10 @@ tests/test_integration.py::test_extract_fields[TEST4]
   net_contents                 '1 PINT, 0.9 FL. OZ.'
   producer_name_address        'MALT & HOP BREWERY, HYATTSVILLE, MD'
   us_importer                  None
-  country_of_origin            'MD'
+  country_of_origin            None
   contains_sulfites            None
 
-?? [2] After postprocess (changed fields) ??
-  country_of_origin            None  ?  was 'MD'
+?? [2] After postprocess ? no changes ??
 
 ?? [3] Secondary passes ??
   sulfites                     raw='none'  ?  accepted=None
@@ -1087,8 +1140,8 @@ tests/test_integration.py::test_label_compliance[COLA13] PASSED
 tests/test_integration.py::test_label_compliance[COLA14] PASSED
 tests/test_integration.py::test_label_compliance[COLA15] PASSED
 tests/test_integration.py::test_label_compliance[COLA16] PASSED
-tests/test_integration.py::test_label_compliance[COLA17] FAILED
-tests/test_integration.py::test_label_compliance[COLA18] FAILED
+tests/test_integration.py::test_label_compliance[COLA17] PASSED
+tests/test_integration.py::test_label_compliance[COLA18] PASSED
 tests/test_integration.py::test_label_compliance[COLA19] PASSED
 tests/test_integration.py::test_label_compliance[COLA2] PASSED
 tests/test_integration.py::test_label_compliance[COLA20] PASSED
@@ -1121,8 +1174,8 @@ tests/test_integration.py::test_verify_passes_with_truth_data[COLA13] FAILED
 tests/test_integration.py::test_verify_passes_with_truth_data[COLA14] PASSED
 tests/test_integration.py::test_verify_passes_with_truth_data[COLA15] PASSED
 tests/test_integration.py::test_verify_passes_with_truth_data[COLA16] PASSED
-tests/test_integration.py::test_verify_passes_with_truth_data[COLA17] FAILED
-tests/test_integration.py::test_verify_passes_with_truth_data[COLA18] FAILED
+tests/test_integration.py::test_verify_passes_with_truth_data[COLA17] PASSED
+tests/test_integration.py::test_verify_passes_with_truth_data[COLA18] PASSED
 tests/test_integration.py::test_verify_passes_with_truth_data[COLA19] PASSED
 tests/test_integration.py::test_verify_passes_with_truth_data[COLA2] PASSED
 tests/test_integration.py::test_verify_passes_with_truth_data[COLA20] PASSED
@@ -1138,33 +1191,4 @@ tests/test_integration.py::test_verify_passes_with_truth_data[COLA29] PASSED
 tests/test_integration.py::test_verify_passes_with_truth_data[COLA3] PASSED
 tests/test_integration.py::test_verify_passes_with_truth_data[COLA30] PASSED
 tests/test_integration.py::test_verify_passes_with_truth_data[COLA4] PASSED
-tests/test_integration.py::test_verify_passes_with_truth_data[COLA5] PASSED
-tests/test_integration.py::test_verify_passes_with_truth_data[COLA6] FAILED
-tests/test_integration.py::test_verify_passes_with_truth_data[COLA7] FAILED
-tests/test_integration.py::test_verify_passes_with_truth_data[COLA8] PASSED
-tests/test_integration.py::test_verify_passes_with_truth_data[COLA9] FAILED
-tests/test_integration.py::test_verify_passes_with_truth_data[TEST1] PASSED
-tests/test_integration.py::test_verify_passes_with_truth_data[TEST2] PASSED
-tests/test_integration.py::test_verify_passes_with_truth_data[TEST3] PASSED
-tests/test_integration.py::test_verify_passes_with_truth_data[TEST4] PASSED
-tests/test_integration.py::test_verify_fails_with_wrong_brand PASSED
-tests/test_integration.py::test_verify_fails_with_wrong_abv PASSED
-tests/test_integration.py::test_history_records_verification PASSED
-
-================================================================================================================== FAILURES ==================================================================================================================
-/app/tests/test_integration.py:243: Failed: COLA10 extraction failures: country_of_origin: expected ~'' got 'United States'
-/app/tests/test_integration.py:243: Failed: COLA11 extraction failures: country_of_origin: expected ~'' got 'Indiana'
-/app/tests/test_integration.py:243: Failed: COLA13 extraction failures: country_of_origin: expected ~'' got 'USA'
-/app/tests/test_integration.py:243: Failed: COLA16 extraction failures: country_of_origin: expected ~'' got 'the USA'
-/app/tests/test_integration.py:243: Failed: COLA17 extraction failures: producer_name_address: expected ~'DC FLYNT MW SELECTIONS, NEW ORLEANS, LOUISIANA 70123' got 'None'; contains_sulfites: expected ~'None' got 'CONTAINS SULFITES'
-/app/tests/test_integration.py:243: Failed: COLA18 extraction failures: producer_name_address: expected ~'DC FLYNT MW SELECTIONS, NEW ORLEANS, LOUISIANA 70123' got 'None'; contains_sulfites: expected ~'None' got 'CONTAINS SULFITES'
-/app/tests/test_integration.py:243: Failed: COLA19 extraction failures: country_of_origin: expected ~'' got 'USA'
-/app/tests/test_integration.py:243: Failed: COLA21 extraction failures: contains_sulfites: expected ~'CONTAINS SULFITES' got 'None'
-/app/tests/test_integration.py:243: Failed: COLA22 extraction failures: producer_name_address: expected ~'SCHATZI WINES, MILAN, NY' got 'ILVERRO, TERRE DEL VOLTOURNO INDICAZIONE GEOGRAFICA PROTETTA'
-/app/tests/test_integration.py:243: Failed: COLA23 extraction failures: country_of_origin: expected ~'' got 'United States'
-/app/tests/test_integration.py:243: Failed: COLA25 extraction failures: producer_name_address: expected ~'Dangerous Wine Group LLC, Clifton Park, NY' got 'BODEGA SOTTANO S.A., B-73014 PERDRIEL, EXPORT B 87804, LUJAN DE CUYO, MENDOZA ARGENTINA'
-/app/tests/test_integration.py:243: Failed: COLA29 extraction failures: country_of_origin: expected ~'' got 'New Mexico'
-/app/tests/test_integration.py:243: Failed: COLA6 extraction failures: brand_name: expected ~'TNT' got 'Tennessee Tea'; country_of_origin: expected ~'' got 'Tennessee'
-/app/tests/test_integration.py:243: Failed: COLA8 extraction failures: country_of_origin: expected ~'' got 'United States'
-/app/tests/test_integration.py:243: Failed: COLA9 extraction failures: brand_name: expected ~'TOMMYROTTER' got 'VODKA'; country_of_origin: expected ~'' got 'New York'
-/app/tests/test_integration.py:227: AssertionError: Extract failed: {"detail":"Extraction failed: Server error '500 Internal Server Error' for url 'http://ollama:11434/api/chat'\nFor more information check: https://developer.mozilla.org
+tests/test_inte
