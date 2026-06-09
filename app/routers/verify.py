@@ -19,7 +19,8 @@ _UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _save_upload(upload: UploadFile, prefix: str) -> Path:
-    dest = _UPLOAD_DIR / f"{prefix}_{uuid.uuid4()}_{upload.filename}"
+    safe_name = Path(upload.filename or "upload").name
+    dest = _UPLOAD_DIR / f"{prefix}_{uuid.uuid4()}_{safe_name}"
     with open(dest, "wb") as f:
         shutil.copyfileobj(upload.file, f)
     return dest
