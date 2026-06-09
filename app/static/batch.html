@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>TTB Label Verification — Batch</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    textarea.auto-resize { overflow: hidden; resize: none; }
+  </style>
 </head>
 <body class="bg-gray-50 min-h-screen">
 
@@ -81,6 +84,13 @@
     </div>
   </main>
 
+  <!-- Image zoom modal -->
+  <div id="img-modal" class="hidden fixed inset-0 bg-black/75 z-50 flex items-center justify-center cursor-zoom-out"
+       onclick="closeModal()">
+    <img id="modal-img" class="max-w-[90vw] max-h-[90vh] object-contain rounded shadow-2xl"
+         onclick="event.stopPropagation()" />
+  </div>
+
   <script>
     // ── State ──────────────────────────────────────────────────────────────
     let currentGroups = { pairs: [], standalones: [], imageCount: 0 };
@@ -92,10 +102,37 @@
       'brand_name', 'class_type', 'alcohol_content', 'net_contents',
       'producer_name_address', 'country_of_origin', 'government_warning', 'contains_sulfites',
     ];
+    const FIELD_LABELS = {
+      brand_name: 'Brand Name',
+      class_type: 'Class / Type',
+      alcohol_content: 'Alcohol Content',
+      net_contents: 'Net Contents',
+      producer_name_address: 'Producer Name & Address',
+      country_of_origin: 'Country of Origin',
+      government_warning: 'Government Warning',
+      contains_sulfites: 'Sulfite Declaration',
+    };
+    const MULTILINE_FIELDS = new Set(['producer_name_address', 'government_warning']);
 
     function esc(s) {
       return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
+
+    // ── Auto-resize textareas ──────────────────────────────────────────────
+    function autoResize(el) {
+      el.style.height = 'auto';
+      el.style.height = el.scrollHeight + 'px';
+    }
+
+    // ── Image zoom modal ───────────────────────────────────────────────────
+    function openModal(src) {
+      document.getElementById('modal-img').src = src;
+      document.getElementById('img-modal').classList.remove('hidden');
+    }
+    function closeModal() {
+      document.getElementById('img-modal').classList.add('hidden');
+    }
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
 
     // ── Phase visibility ───────────────────────────────────────────────────
     function showPhase(name) {
@@ -181,9 +218,11 @@
     }
 
     // ── Phase 2: Preview rendering ─────────────────────────────────────────
-    function thumb(file) {
+    function thumb(file, small = true) {
       const url = URL.createObjectURL(file);
-      return `<img src="${url}" class="h-20 w-20 object-contain rounded border border-gray-200 bg-gray-50">`;
+      const cls = small ? 'h-20 w-20' : 'h-24 w-24';
+      return `<img src="${url}" class="${cls} object-contain rounded border border-gray-200 bg-gray-50 cursor-zoom-in"
+                   onclick="openModal(this.src)" title="Click to enlarge">`;
     }
 
     function warnBadge(parsed) {
@@ -252,21 +291,26 @@
     }
 
     // ── Phase 3: Extraction ────────────────────────────────────────────────
-    document.getElementById('process-btn').addEventListener('click', () => {
+    document.getElementById('process-btn').addEventListener('click', async () => {
       document.getElementById('process-btn').disabled = true;
       extractionResults = [];
       document.getElementById('results-list').innerHTML = '';
       document.getElementById('submit-all-btn').disabled = true;
       document.getElementById('download-csv-btn').disabled = true;
       showPhase('results');
-      processGroups();
+      try {
+        await processGroups();
+      } catch (err) {
+        document.getElementById('progress-label').textContent = 'Error: ' + err.message;
+        document.getElementById('process-btn').disabled = false;
+      }
     });
 
     function updateProgress(done, total) {
       const pct = total > 0 ? Math.round((done / total) * 100) : 0;
       document.getElementById('progress-bar').style.width = pct + '%';
       document.getElementById('progress-count').textContent = `${done} / ${total}`;
-      if (done === total) {
+      if (done === total && total > 0) {
         document.getElementById('progress-label').textContent = 'Complete';
       }
     }
@@ -278,6 +322,16 @@
         ...currentGroups.standalones.map(s => ({ isPair: false, front: s })),
       ];
       const total = allGroups.length;
+
+      if (total === 0) {
+        document.getElementById('progress-label').textContent =
+          'No images found. Make sure your browser supports folder upload and the folder contains images.';
+        document.getElementById('submit-all-btn').disabled = false;
+        document.getElementById('download-csv-btn').disabled = false;
+        document.getElementById('process-btn').disabled = false;
+        return;
+      }
+
       updateProgress(0, total);
 
       for (let i = 0; i < allGroups.length; i++) {
@@ -367,23 +421,38 @@
 
       const frontUrl  = URL.createObjectURL(result.frontFile);
       const backThumb = result.backFile
-        ? `<img src="${URL.createObjectURL(result.backFile)}" class="h-20 w-20 object-contain rounded border border-gray-200 bg-gray-50 shrink-0">`
+        ? `<div class="relative shrink-0" style="resize:both; overflow:hidden; width:80px; height:80px; min-width:60px; min-height:60px;">
+             <img src="${URL.createObjectURL(result.backFile)}"
+                  class="w-full h-full object-contain rounded border border-gray-200 bg-gray-50 cursor-zoom-in"
+                  onclick="openModal(this.src)" title="Click to enlarge">
+           </div>`
         : '';
 
-      const fieldRows = LABEL_FIELDS.map(f => {
-        const val = result.extracted[f];
-        const display = (val !== null && val !== undefined && val !== '')
-          ? esc(val)
-          : '<span class="text-gray-300 italic text-xs">not detected</span>';
-        return `<tr class="border-b last:border-0">
-          <td class="py-1 pr-4 text-gray-500 text-xs w-1/3">${f}</td>
-          <td class="py-1 text-gray-800 text-sm">${display}</td>
-        </tr>`;
+      // Build editable field inputs
+      const fieldInputs = LABEL_FIELDS.map(f => {
+        const val = result.extracted[f] ?? '';
+        const label = FIELD_LABELS[f];
+        if (MULTILINE_FIELDS.has(f)) {
+          return `<div>
+            <label class="block text-xs text-gray-500 mb-0.5">${label}</label>
+            <textarea id="field-${f}-${idx}" rows="2"
+              class="auto-resize w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300">${esc(val)}</textarea>
+          </div>`;
+        }
+        return `<div>
+          <label class="block text-xs text-gray-500 mb-0.5">${label}</label>
+          <input type="text" id="field-${f}-${idx}" value="${esc(val)}"
+            class="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300" />
+        </div>`;
       }).join('');
 
       card.innerHTML = `
         <div class="flex gap-4 mb-3">
-          <img src="${frontUrl}" class="h-20 w-20 object-contain rounded border border-gray-200 bg-gray-50 shrink-0">
+          <div class="relative shrink-0" style="resize:both; overflow:hidden; width:80px; height:80px; min-width:60px; min-height:60px;">
+            <img src="${frontUrl}"
+                 class="w-full h-full object-contain rounded border border-gray-200 bg-gray-50 cursor-zoom-in"
+                 onclick="openModal(this.src)" title="Click to enlarge">
+          </div>
           ${backThumb}
           <div class="flex-1 min-w-0">
             <div class="font-medium text-gray-700 text-sm truncate">
@@ -394,10 +463,12 @@
           </div>
         </div>
         <details class="mb-3">
-          <summary class="text-xs text-gray-400 cursor-pointer hover:text-gray-600 select-none">
-            Show extracted fields
+          <summary class="text-xs text-gray-500 cursor-pointer hover:text-gray-700 select-none font-medium">
+            Edit extracted fields
           </summary>
-          <table class="w-full mt-2"><tbody>${fieldRows}</tbody></table>
+          <div class="space-y-2 mt-3">
+            ${fieldInputs}
+          </div>
         </details>
         <div class="flex items-center gap-3">
           <button onclick="submitSingle(${idx})" id="submit-btn-${idx}"
@@ -408,12 +479,25 @@
         </div>
       `;
       container.appendChild(card);
+
+      // Wire auto-resize for textareas in this card
+      card.querySelectorAll('textarea.auto-resize').forEach(el => {
+        el.addEventListener('input', () => autoResize(el));
+        autoResize(el);
+      });
     }
 
     // ── Phase 4: Submit ────────────────────────────────────────────────────
     async function submitSingle(idx) {
       const result = extractionResults[idx];
       if (result.submitted || result.error) return;
+
+      // Read current (possibly edited) field values from the card inputs
+      const editedExtracted = {};
+      LABEL_FIELDS.forEach(f => {
+        const el = document.getElementById(`field-${f}-${idx}`);
+        editedExtracted[f] = el ? (el.value.trim() || null) : (result.extracted[f] ?? null);
+      });
 
       const btn = document.getElementById(`submit-btn-${idx}`);
       btn.disabled = true;
@@ -426,13 +510,14 @@
           body: JSON.stringify({
             image_filename:      result.frontFilename,
             back_image_filename: result.backFilename || null,
-            extracted:           result.extracted,
+            extracted:           editedExtracted,
             compliance:          result.compliance,
             batch_id:            result.batchId,
           }),
         });
         if (!resp.ok) throw new Error((await resp.json()).detail || 'Save failed');
         result.submitted = true;
+        result.extracted = editedExtracted;
         btn.textContent  = '✓ Saved';
         btn.className    = 'bg-green-500 text-white text-sm font-semibold py-1.5 px-4 rounded cursor-default';
         document.getElementById(`submit-status-${idx}`).textContent = 'Saved to database';
@@ -469,16 +554,22 @@
       const escape = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
       const headers = ['front_filename', 'back_filename', 'compliance_pass', ...LABEL_FIELDS];
 
-      const rows = extractionResults.map(r => {
+      const rows = extractionResults.map((r, idx) => {
         if (r.error) {
           return [escape(r.frontFilename), escape(r.backFilename || ''), 'error',
                   ...LABEL_FIELDS.map(() => '""')].join(',');
         }
+        // Read current field values from inputs (respects any edits made)
+        const vals = {};
+        LABEL_FIELDS.forEach(f => {
+          const el = document.getElementById(`field-${f}-${idx}`);
+          vals[f] = el ? el.value.trim() : (r.extracted[f] ?? '');
+        });
         return [
           escape(r.frontFilename),
           escape(r.backFilename || ''),
           r.compliance?.compliant ? 'true' : 'false',
-          ...LABEL_FIELDS.map(f => escape(r.extracted[f])),
+          ...LABEL_FIELDS.map(f => escape(vals[f])),
         ].join(',');
       });
 
