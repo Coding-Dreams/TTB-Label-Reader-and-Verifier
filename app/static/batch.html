@@ -12,8 +12,8 @@
 <body class="bg-gray-50 min-h-screen">
 
   <nav class="bg-white border-b border-gray-200 px-6 py-3 flex gap-6">
-    <a href="/" class="text-gray-600 hover:text-blue-600">Verify</a>
-    <a href="/batch-upload" class="font-semibold text-blue-600">Batch</a>
+    <a href="/" class="text-gray-600 hover:text-blue-600">Single Label</a>
+    <a href="/batch-upload" class="font-semibold text-blue-600">Batch Labels</a>
     <a href="/history" class="text-gray-600 hover:text-blue-600">History</a>
   </nav>
 
@@ -58,9 +58,15 @@
     <div id="phase-results" class="hidden mt-6">
       <!-- Progress bar -->
       <div class="bg-white rounded-lg shadow p-4 mb-4">
-        <div class="flex justify-between text-sm text-gray-600 mb-2">
+        <div class="flex justify-between items-center text-sm text-gray-600 mb-2">
           <span id="progress-label">Extracting...</span>
-          <span id="progress-count"></span>
+          <div class="flex items-center gap-3">
+            <button id="stop-btn" onclick="requestStop()"
+              class="hidden text-sm font-medium text-red-500 hover:text-red-700">
+              Stop
+            </button>
+            <span id="progress-count"></span>
+          </div>
         </div>
         <div class="w-full bg-gray-200 rounded-full h-2">
           <div id="progress-bar" class="bg-blue-600 h-2 rounded-full transition-all duration-300" style="width:0%"></div>
@@ -95,6 +101,16 @@
     // ── State ──────────────────────────────────────────────────────────────
     let currentGroups = { pairs: [], standalones: [], imageCount: 0 };
     let extractionResults = [];
+    let stopRequested = false;
+
+    // ── UUID helper (crypto.randomUUID requires HTTPS; fallback works on HTTP) ──
+    function generateUUID() {
+      if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        const r = Math.random() * 16 | 0;
+        return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+      });
+    }
 
     // ── Constants ──────────────────────────────────────────────────────────
     const IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tiff']);
@@ -315,8 +331,15 @@
       }
     }
 
+    function requestStop() {
+      stopRequested = true;
+      document.getElementById('stop-btn').textContent = 'Stopping…';
+      document.getElementById('stop-btn').disabled = true;
+    }
+
     async function processGroups() {
-      const batchId = crypto.randomUUID();
+      stopRequested = false;
+      const batchId = generateUUID();
       const allGroups = [
         ...currentGroups.pairs.map(p => ({ isPair: true,  front: p.front, back: p.back })),
         ...currentGroups.standalones.map(s => ({ isPair: false, front: s })),
@@ -333,8 +356,17 @@
       }
 
       updateProgress(0, total);
+      const stopBtn = document.getElementById('stop-btn');
+      stopBtn.textContent = 'Stop';
+      stopBtn.disabled = false;
+      stopBtn.classList.remove('hidden');
 
       for (let i = 0; i < allGroups.length; i++) {
+        if (stopRequested) {
+          document.getElementById('progress-label').textContent =
+            `Stopped after ${i} of ${total}`;
+          break;
+        }
         const result = await extractGroup(allGroups[i]);
         result.batchId = batchId;
         extractionResults.push(result);
@@ -342,6 +374,7 @@
         updateProgress(i + 1, total);
       }
 
+      stopBtn.classList.add('hidden');
       document.getElementById('submit-all-btn').disabled = false;
       document.getElementById('download-csv-btn').disabled = false;
       document.getElementById('process-btn').disabled = false;
