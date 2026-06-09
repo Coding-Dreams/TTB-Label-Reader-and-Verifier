@@ -147,7 +147,7 @@
         <button id="verify-btn"
           class="mt-4 w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded disabled:opacity-50"
           disabled>
-          Verify Label
+          Verify and Submit
         </button>
       </div>
     </div>
@@ -389,7 +389,7 @@
     document.getElementById('verify-btn').addEventListener('click', async () => {
       if (!hasImage()) return;
       const btn = document.getElementById('verify-btn');
-      btn.textContent = 'Verifying...';
+      btn.textContent = 'Submitting...';
       btn.disabled = true;
       document.getElementById('error-msg').classList.add('hidden');
       document.getElementById('results').classList.add('hidden');
@@ -398,18 +398,21 @@
       currentAbort = new AbortController();
       const signal = currentAbort.signal;
 
-      const fd = buildFormData();
+      // Send only the form fields — no image re-extraction.
+      // The user has already reviewed/corrected the extracted values;
+      // those are treated as ground truth and checked for TTB compliance.
+      const fd = new FormData();
       FIELDS.forEach(f => fd.append(f, document.getElementById(f).value));
 
       try {
-        const res = await fetch('/verify', { method: 'POST', body: fd, signal });
+        const res = await fetch('/verify-fields', { method: 'POST', body: fd, signal });
         if (!res.ok) throw new Error((await res.json()).detail);
         renderResults(await res.json());
       } catch (err) {
         if (err.name !== 'AbortError') showError(err.message);
       } finally {
         currentAbort = null;
-        btn.textContent = 'Verify Label';
+        btn.textContent = 'Verify and Submit';
         btn.disabled = !hasImage();
       }
     });

@@ -54,6 +54,65 @@ async def extract(
             tmp_back.unlink(missing_ok=True)
 
 
+@router.post("/verify-fields")
+async def verify_fields(
+    brand_name: str = Form(default=""),
+    class_type: str = Form(default=""),
+    alcohol_content: str = Form(default=""),
+    net_contents: str = Form(default=""),
+    producer_name_address: str = Form(default=""),
+    country_of_origin: str = Form(default=""),
+    government_warning: str = Form(default=""),
+    contains_sulfites: str = Form(default=""),
+):
+    """Verify user-confirmed field values without re-extracting from the image.
+    Treats whatever is in the form as ground truth; only compliance is checked."""
+    fields = LabelFields(
+        brand_name=brand_name or None,
+        class_type=class_type or None,
+        alcohol_content=alcohol_content or None,
+        net_contents=net_contents or None,
+        producer_name_address=producer_name_address or None,
+        country_of_origin=country_of_origin or None,
+        government_warning=government_warning or None,
+        contains_sulfites=contains_sulfites or None,
+    )
+    compliance = check_compliance(fields.model_dump())
+
+    _FIELD_NAMES = [
+        "brand_name", "class_type", "alcohol_content", "net_contents",
+        "producer_name_address", "country_of_origin", "government_warning",
+        "contains_sulfites",
+    ]
+    field_results = [
+        {
+            "field": f,
+            "status": "pass" if getattr(fields, f) else "not_detected",
+            "extracted_value": getattr(fields, f),
+            "submitted_value": getattr(fields, f),
+        }
+        for f in _FIELD_NAMES
+    ]
+    form_match = {
+        "overall_pass": True,
+        "fields": field_results,
+    }
+    overall_pass = compliance["compliant"]
+    response = {
+        "overall_pass": overall_pass,
+        "form_match": form_match,
+        "compliance": compliance,
+    }
+    save_verification(
+        image_filename="(manual entry)",
+        form_data=fields.model_dump(),
+        extracted=fields.model_dump(),
+        results=response,
+        overall_pass=overall_pass,
+    )
+    return response
+
+
 @router.post("/verify")
 async def verify(
     image: UploadFile = File(...),
