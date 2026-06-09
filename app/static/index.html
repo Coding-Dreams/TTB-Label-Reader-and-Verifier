@@ -335,8 +335,7 @@
       btn.disabled = true;
       document.getElementById('error-msg').classList.add('hidden');
       document.getElementById('results').classList.add('hidden');
-      // Clear field values and highlights so results reflect the current image fresh
-      clearFields();
+      resetHighlights();
 
       const fd = buildFormData();
       FIELDS.forEach(f => fd.append(f, document.getElementById(f).value));
@@ -344,12 +343,7 @@
       try {
         const res = await fetch('/verify', { method: 'POST', body: fd });
         if (!res.ok) throw new Error((await res.json()).detail);
-        const data = await res.json();
-        // Populate form fields with what was extracted from the label
-        (data.form_match.fields || []).forEach(f => {
-          if (f.extracted_value) setFieldValue(f.field, f.extracted_value);
-        });
-        renderResults(data);
+        renderResults(await res.json());
       } catch (err) {
         showError(err.message);
       } finally {
