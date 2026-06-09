@@ -119,8 +119,8 @@
 
     // ── Grouping algorithm ─────────────────────────────────────────────────
     function groupFiles(fileList) {
-      const FRONT_RE = /\bfront\b/i;
-      const BACK_RE  = /\bback\b/i;
+      const FRONT_RE = /front/i;
+      const BACK_RE  = /back/i;
 
       const images = Array.from(fileList).filter(f => {
         const ext = f.name.split('.').pop().toLowerCase();
@@ -286,6 +286,7 @@
 
       document.getElementById('submit-all-btn').disabled = false;
       document.getElementById('download-csv-btn').disabled = false;
+      document.getElementById('process-btn').disabled = false;
     }
 
     async function extractGroup(group) {
