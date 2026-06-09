@@ -51,14 +51,13 @@
       <div id="detail-compliance" class="mb-4 text-sm"></div>
 
       <!-- Form-match table -->
-      <h3 class="font-semibold text-gray-700 text-sm mb-2">Application vs. Label</h3>
+      <h3 class="font-semibold text-gray-700 text-sm mb-2">Submitted Values</h3>
       <table class="w-full text-sm">
         <thead>
           <tr class="text-left text-gray-500 border-b">
             <th class="pb-2">Field</th>
             <th class="pb-2">Status</th>
-            <th class="pb-2">Extracted</th>
-            <th class="pb-2">Submitted</th>
+            <th class="pb-2">Submitted Value</th>
           </tr>
         </thead>
         <tbody id="detail-body"></tbody>
@@ -145,7 +144,6 @@
         <tr class="border-b last:border-0">
           <td class="py-2 text-gray-700">${FIELD_LABELS[f.field] || f.field}</td>
           <td class="py-2 ${STATUS_STYLE[f.status]}">${STATUS_ICON[f.status]} ${f.status.replace('_', ' ')}</td>
-          <td class="py-2 text-gray-600 text-xs max-w-xs truncate">${escapeHtml(f.extracted_value ?? '—')}</td>
           <td class="py-2 text-gray-600 text-xs max-w-xs truncate">${escapeHtml(f.submitted_value ?? '—')}</td>
         </tr>`).join('');
       document.getElementById('detail-panel').classList.remove('hidden');

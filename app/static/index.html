@@ -168,13 +168,12 @@
 
       <!-- Form-match table -->
       <div>
-        <h3 class="font-semibold text-gray-700 mb-2">Application vs. Label</h3>
+        <h3 class="font-semibold text-gray-700 mb-2">Submitted Values</h3>
         <table class="w-full text-sm">
           <thead>
             <tr class="text-left text-gray-500 border-b">
               <th class="pb-2">Field</th>
               <th class="pb-2">Status</th>
-              <th class="pb-2">Extracted from Label</th>
               <th class="pb-2">Submitted Value</th>
             </tr>
           </thead>
@@ -246,7 +245,7 @@
       const extractBtn = document.getElementById('extract-btn');
       const verifyBtn  = document.getElementById('verify-btn');
       extractBtn.textContent = 'Extract from Image';
-      verifyBtn.textContent  = 'Verify Label';
+      verifyBtn.textContent  = 'Verify and Submit';
       extractBtn.disabled = !hasImage();
       verifyBtn.disabled  = !hasImage();
     }
@@ -460,7 +459,6 @@
         <tr class="border-b last:border-0">
           <td class="py-2 text-gray-700">${FIELD_LABELS[f.field] || f.field}</td>
           <td class="py-2 ${STATUS_STYLE[f.status]}">${STATUS_ICON[f.status]} ${f.status.replace('_', ' ')}</td>
-          <td class="py-2 text-gray-600 text-xs max-w-xs truncate">${f.extracted_value ?? '—'}</td>
           <td class="py-2 text-gray-600 text-xs max-w-xs truncate">${f.submitted_value ?? '—'}</td>
         </tr>`).join('');
       document.getElementById('results').classList.remove('hidden');
