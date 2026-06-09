@@ -298,13 +298,14 @@
         const res = await fetch('/extract', { method: 'POST', body: fd });
         if (!res.ok) throw new Error((await res.json()).detail || 'Extraction failed');
         const data = await res.json();
+        const { compliance, ...labelFields } = data;
         return {
           frontFilename: group.front.file.name,
           backFilename:  group.isPair ? group.back.file.name : null,
           frontFile:     group.front.file,
           backFile:      group.isPair ? group.back.file : null,
-          extracted:     data,
-          compliance:    data.compliance,
+          extracted:     labelFields,
+          compliance:    compliance,
           batchId:       null,
           submitted:     false,
           error:         null,
@@ -414,7 +415,6 @@
             image_filename:      result.frontFilename,
             back_image_filename: result.backFilename || null,
             extracted:           result.extracted,
-            overall_pass:        result.compliance?.compliant ?? false,
             compliance:          result.compliance,
             batch_id:            result.batchId,
           }),
@@ -441,11 +441,14 @@
         await submitSingle(i);
       }
       const anyFailed = extractionResults.some(r => !r.submitted && !r.error);
+      const anySaved  = extractionResults.some(r => r.submitted);
       if (anyFailed) {
         btn.disabled = false;
         btn.textContent = 'Submit All (retry failures)';
-      } else {
+      } else if (anySaved) {
         btn.textContent = 'All Submitted';
+      } else {
+        btn.textContent = 'Nothing submitted';
       }
     }
 
