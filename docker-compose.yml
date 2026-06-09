@@ -36,6 +36,7 @@ services:
       - "8000:8000"
     volumes:
       - ./data:/app/data
+      - ./app/static:/app/app/static
     environment:
       - OLLAMA_BASE_URL=http://ollama:11434
       # Max concurrent tesseract subprocesses. Default 2 is the safe floor;

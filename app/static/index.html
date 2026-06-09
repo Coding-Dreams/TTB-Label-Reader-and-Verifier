@@ -210,6 +210,23 @@
     }
     document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
 
+    // ---------- In-flight request cancellation ----------
+    let currentAbort = null;
+
+    function abortCurrent() {
+      if (currentAbort) {
+        currentAbort.abort();
+        currentAbort = null;
+      }
+      // Reset both buttons to idle state
+      const extractBtn = document.getElementById('extract-btn');
+      const verifyBtn  = document.getElementById('verify-btn');
+      extractBtn.textContent = 'Extract from Image';
+      verifyBtn.textContent  = 'Verify Label';
+      extractBtn.disabled = !hasImage();
+      verifyBtn.disabled  = !hasImage();
+    }
+
     // ---------- Image upload state ----------
     let mode = 'single';
     let singleFile = null;
@@ -262,6 +279,7 @@
 
     document.querySelectorAll('input[name="upload-mode"]').forEach(el => {
       el.addEventListener('change', (e) => {
+        abortCurrent();
         mode = e.target.value;
         document.getElementById('single-mode').classList.toggle('hidden', mode !== 'single');
         document.getElementById('dual-mode').classList.toggle('hidden', mode !== 'dual');
@@ -306,8 +324,9 @@
       btn.textContent = 'Extracting...';
       btn.disabled = true;
       clearFields();
+      currentAbort = new AbortController();
       try {
-        const res = await fetch('/extract', { method: 'POST', body: buildFormData() });
+        const res = await fetch('/extract', { method: 'POST', body: buildFormData(), signal: currentAbort.signal });
         if (!res.ok) throw new Error((await res.json()).detail);
         const data = await res.json();
         FIELDS.forEach(f => {
@@ -315,13 +334,13 @@
             setFieldValue(f, data[f]);
             markField(f, false);
           } else {
-            // Highlight fields the model couldn't extract so the user knows to fill them
             markField(f, true);
           }
         });
       } catch (err) {
-        showError(err.message);
+        if (err.name !== 'AbortError') showError(err.message);
       } finally {
+        currentAbort = null;
         btn.textContent = 'Extract from Image';
         btn.disabled = !hasImage();
       }
@@ -338,27 +357,32 @@
       resetHighlights();
 
       // If the form is blank, auto-extract first so submitted values are populated
+      currentAbort = new AbortController();
+      const signal = currentAbort.signal;
       const hasFormData = FIELDS.some(f => document.getElementById(f)?.value?.trim());
       if (!hasFormData) {
         try {
-          const extRes = await fetch('/extract', { method: 'POST', body: buildFormData() });
+          const extRes = await fetch('/extract', { method: 'POST', body: buildFormData(), signal });
           if (extRes.ok) {
             const extData = await extRes.json();
             FIELDS.forEach(f => { if (extData[f]) setFieldValue(f, extData[f]); });
           }
-        } catch (_) { /* proceed with empty values if extraction fails */ }
+        } catch (err) {
+          if (err.name === 'AbortError') { currentAbort = null; btn.textContent = 'Verify Label'; btn.disabled = !hasImage(); return; }
+        }
       }
 
       const fd = buildFormData();
       FIELDS.forEach(f => fd.append(f, document.getElementById(f).value));
 
       try {
-        const res = await fetch('/verify', { method: 'POST', body: fd });
+        const res = await fetch('/verify', { method: 'POST', body: fd, signal });
         if (!res.ok) throw new Error((await res.json()).detail);
         renderResults(await res.json());
       } catch (err) {
-        showError(err.message);
+        if (err.name !== 'AbortError') showError(err.message);
       } finally {
+        currentAbort = null;
         btn.textContent = 'Verify Label';
         btn.disabled = !hasImage();
       }
