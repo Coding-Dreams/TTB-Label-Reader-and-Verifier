@@ -47,7 +47,7 @@
             <input type="file" id="image-input-single" accept="image/*" class="hidden" />
           </div>
           <div id="resize-single" class="hidden mt-3 rounded overflow-hidden"
-               style="resize:both; height:400px; min-height:150px; min-width:150px;">
+               style="resize:both; height:400px; min-height:150px; min-width:150px; max-width:100%;">
             <img id="image-preview-single" class="w-full h-full object-contain cursor-zoom-in"
                  title="Click to enlarge" onclick="openModal(this.src)" />
           </div>
@@ -55,27 +55,27 @@
 
         <!-- Dual image mode -->
         <div id="dual-mode" class="hidden">
-          <div class="grid grid-cols-2 gap-3">
+          <div class="flex flex-col gap-3">
             <div>
               <div id="drop-zone-front"
-                class="flex flex-col items-center justify-center border-2 border-dashed border-gray-300 rounded-lg h-48 cursor-pointer hover:border-blue-400 transition-colors text-xs">
-                <span class="text-gray-400 select-none" id="drop-label-front">Front label</span>
+                class="flex flex-col items-center justify-center border-2 border-dashed border-gray-300 rounded-lg h-20 cursor-pointer hover:border-blue-400 transition-colors text-xs">
+                <span class="text-gray-400 select-none" id="drop-label-front">Front label — click or drag</span>
                 <input type="file" id="image-input-front" accept="image/*" class="hidden" />
               </div>
               <div id="resize-front" class="hidden mt-2 rounded overflow-hidden"
-                   style="resize:both; height:250px; min-height:100px; min-width:100px;">
+                   style="resize:both; height:300px; min-height:100px; min-width:150px; max-width:100%;">
                 <img id="image-preview-front" class="w-full h-full object-contain cursor-zoom-in"
                      title="Click to enlarge" onclick="openModal(this.src)" />
               </div>
             </div>
             <div>
               <div id="drop-zone-back"
-                class="flex flex-col items-center justify-center border-2 border-dashed border-gray-300 rounded-lg h-48 cursor-pointer hover:border-blue-400 transition-colors text-xs">
-                <span class="text-gray-400 select-none" id="drop-label-back">Back label</span>
+                class="flex flex-col items-center justify-center border-2 border-dashed border-gray-300 rounded-lg h-20 cursor-pointer hover:border-blue-400 transition-colors text-xs">
+                <span class="text-gray-400 select-none" id="drop-label-back">Back label — click or drag</span>
                 <input type="file" id="image-input-back" accept="image/*" class="hidden" />
               </div>
               <div id="resize-back" class="hidden mt-2 rounded overflow-hidden"
-                   style="resize:both; height:250px; min-height:100px; min-width:100px;">
+                   style="resize:both; height:300px; min-height:100px; min-width:150px; max-width:100%;">
                 <img id="image-preview-back" class="w-full h-full object-contain cursor-zoom-in"
                      title="Click to enlarge" onclick="openModal(this.src)" />
               </div>
