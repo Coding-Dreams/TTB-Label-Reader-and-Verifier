@@ -141,10 +141,14 @@
 
         if (frontIdx !== -1 && (backIdx === -1 || frontIdx <= backIdx)) {
           role = 'front';
-          base = (stem.slice(0, frontIdx) + stem.slice(frontIdx + 5)).toLowerCase().trim();
+          const left  = stem.slice(0, frontIdx).toLowerCase().trim();
+          const right = stem.slice(frontIdx + 5).toLowerCase().trim();
+          base = left + '|' + right;
         } else if (backIdx !== -1) {
           role = 'back';
-          base = (stem.slice(0, backIdx) + stem.slice(backIdx + 4)).toLowerCase().trim();
+          const left  = stem.slice(0, backIdx).toLowerCase().trim();
+          const right = stem.slice(backIdx + 4).toLowerCase().trim();
+          base = left + '|' + right;
         }
 
         return { file, stem, base, role, ambiguous };
@@ -296,7 +300,15 @@
 
       try {
         const res = await fetch('/extract', { method: 'POST', body: fd });
-        if (!res.ok) throw new Error((await res.json()).detail || 'Extraction failed');
+        if (!res.ok) {
+          let detail = `Server error (${res.status})`;
+          try {
+            const errData = await res.json();
+            const d = errData.detail;
+            detail = typeof d === 'string' ? d : (d ? JSON.stringify(d) : detail);
+          } catch {}
+          throw new Error(detail);
+        }
         const data = await res.json();
         const { compliance, ...labelFields } = data;
         return {
