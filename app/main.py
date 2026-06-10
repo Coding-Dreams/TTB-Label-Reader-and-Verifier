@@ -7,11 +7,12 @@ from threading import Lock
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request as StarletteRequest
 
 from app.routers import verify, batch
+from app.services import log_bus
 from app.services.db import init_db, get_verifications, get_verification
 from app.services.ollama import _warmup_model
 from app.services.pdf_export import generate_filled_cola
@@ -143,6 +144,28 @@ def get_single(verification_id: int):
     if not record:
         raise HTTPException(status_code=404, detail="Not found")
     return record
+
+
+@app.get("/api/logs/stream")
+async def stream_logs(request: StarletteRequest):
+    q = log_bus.subscribe()
+    async def generate():
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    msg = await asyncio.wait_for(q.get(), timeout=20.0)
+                    yield f"data: {msg}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+        finally:
+            log_bus.unsubscribe(q)
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/api/history/{verification_id}/pdf")

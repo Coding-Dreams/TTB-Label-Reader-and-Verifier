@@ -8,6 +8,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from PIL import Image
 
 from app.models.label import LabelFields
+from app.services import log_bus
 from app.services.comparator import compare_label
 from app.services.compliance import check_compliance
 from app.services.db import save_verification
@@ -60,6 +61,7 @@ async def extract(
     try:
         if back_image and back_image.filename:
             tmp_back = _save_upload(back_image, "tmp_back")
+        await log_bus.emit(f"Extract request received — {image.filename or 'image'}")
         debug_info: Optional[dict] = {} if verbose else None
         fields = await extract_label_fields(tmp, tmp_back, debug_info=debug_info)
         result = fields.model_dump()
@@ -68,10 +70,13 @@ async def extract(
             result["_debug"] = debug_info
         return result
     except httpx.TimeoutException:
+        await log_bus.emit("Error: model timed out")
         raise HTTPException(status_code=504, detail="Model took too long — try again")
     except httpx.ConnectError:
+        await log_bus.emit("Error: Ollama service unavailable")
         raise HTTPException(status_code=503, detail="Verification service unavailable — is Ollama running?")
     except Exception as e:
+        await log_bus.emit(f"Error: {e}")
         raise HTTPException(status_code=422, detail=f"Extraction failed: {str(e)}")
     finally:
         tmp.unlink(missing_ok=True)
@@ -157,7 +162,9 @@ async def verify(
         if back_image and back_image.filename:
             tmp_back = _save_upload(back_image, "tmp_back")
 
+        await log_bus.emit(f"Verify request received — {image.filename or 'image'}")
         extracted = await extract_label_fields(tmp, tmp_back)
+        await log_bus.emit("Comparing extracted fields against submitted form")
         form_data = LabelFields(
             brand_name=brand_name or None,
             class_type=class_type or None,
@@ -188,12 +195,17 @@ async def verify(
             results=response,
             overall_pass=overall_pass,
         )
+        status = "PASS" if overall_pass else "FAIL"
+        await log_bus.emit(f"Verification complete — {status}")
         return response
     except httpx.TimeoutException:
+        await log_bus.emit("Error: model timed out")
         raise HTTPException(status_code=504, detail="Model took too long — try again")
     except httpx.ConnectError:
+        await log_bus.emit("Error: Ollama service unavailable")
         raise HTTPException(status_code=503, detail="Verification service unavailable — is Ollama running?")
     except Exception as e:
+        await log_bus.emit(f"Error: {e}")
         raise HTTPException(status_code=422, detail=f"Verification failed: {str(e)}")
     finally:
         tmp.unlink(missing_ok=True)

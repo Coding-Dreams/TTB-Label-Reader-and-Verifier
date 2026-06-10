@@ -18,6 +18,20 @@
   </nav>
 
   <main class="max-w-4xl mx-auto p-6">
+    <!-- Live server log -->
+    <div class="bg-gray-900 rounded-lg shadow mb-6 overflow-hidden">
+      <div class="flex items-center justify-between px-4 py-2 border-b border-gray-700">
+        <div class="flex items-center gap-2">
+          <div id="log-dot" class="w-2 h-2 rounded-full bg-gray-500"></div>
+          <span class="text-xs font-semibold text-gray-300 tracking-wide">Server Log</span>
+        </div>
+        <button onclick="clearLog()" class="text-xs text-gray-500 hover:text-gray-300">Clear</button>
+      </div>
+      <div id="log-body" class="max-h-44 overflow-y-auto p-3">
+        <div id="log-entries" class="font-mono text-xs text-green-400 leading-5 space-y-0.5"></div>
+      </div>
+    </div>
+
     <h1 class="text-2xl font-bold text-gray-800 mb-2">Batch Verification</h1>
     <p class="text-sm text-gray-500 mb-6">
       Select a folder of label images. Front/back pairs are detected automatically from filenames.
@@ -367,7 +381,10 @@
             `Stopped after ${i} of ${total}`;
           break;
         }
-        const result = await extractGroup(allGroups[i]);
+        const g = allGroups[i];
+        const labelName = g.front.file.name + (g.isPair ? ' + ' + g.back.file.name : '');
+        addLogEntry(`[${_utcTimestamp()}] ── Label ${i + 1}/${total}: ${labelName}`);
+        const result = await extractGroup(g);
         result.batchId = batchId;
         extractionResults.push(result);
         appendResultCard(result, extractionResults.length - 1);
@@ -477,11 +494,12 @@
         .map(v => `<li class="text-xs text-red-400 mt-0.5">${esc(v.label)}: ${esc(v.message)}</li>`)
         .join('');
 
-      const frontUrl  = URL.createObjectURL(result.frontFile);
-      const backThumb = result.backFile
-        ? `<div class="relative shrink-0" style="resize:both; overflow:hidden; width:80px; height:80px; min-width:60px; min-height:60px;">
+      const frontUrl   = URL.createObjectURL(result.frontFile);
+      const imgWidth   = result.backFile ? '40%' : '80%';
+      const backImgHtml = result.backFile
+        ? `<div style="width:40%;">
              <img src="${URL.createObjectURL(result.backFile)}"
-                  class="w-full h-full object-contain rounded border border-gray-200 bg-gray-50 cursor-zoom-in"
+                  class="w-full h-auto max-h-72 object-contain rounded border border-gray-200 bg-gray-50 cursor-zoom-in"
                   onclick="openModal(this.src)" title="Click to enlarge">
            </div>`
         : '';
@@ -505,22 +523,18 @@
       }).join('');
 
       card.innerHTML = `
-        <div class="flex gap-4 mb-3">
-          <div class="relative shrink-0" style="resize:both; overflow:hidden; width:80px; height:80px; min-width:60px; min-height:60px;">
+        <div class="font-medium text-gray-700 text-sm mb-2">
+          ${esc(result.frontFilename)}${result.backFilename ? ' <span class="text-gray-400 text-xs">+ ' + esc(result.backFilename) + '</span>' : ''}
+        </div>
+        <div class="flex gap-2 mb-3">
+          <div style="width:${imgWidth};">
             <img src="${frontUrl}"
-                 class="w-full h-full object-contain rounded border border-gray-200 bg-gray-50 cursor-zoom-in"
+                 class="w-full h-auto max-h-72 object-contain rounded border border-gray-200 bg-gray-50 cursor-zoom-in"
                  onclick="openModal(this.src)" title="Click to enlarge">
           </div>
-          ${backThumb}
-          <div class="flex-1 min-w-0">
-            <div class="font-medium text-gray-700 text-sm truncate">
-              ${esc(result.frontFilename)}${result.backFilename ? ' <span class="text-gray-400">+</span> ' + esc(result.backFilename) : ''}
-            </div>
-            <div class="mt-1">${complianceLabel}</div>
-            ${violations ? `<ul class="mt-1 list-none">${violations}</ul>` : ''}
-          </div>
+          ${backImgHtml}
         </div>
-        <details class="mb-3">
+        <details open class="mb-3">
           <summary class="text-xs text-gray-500 cursor-pointer hover:text-gray-700 select-none font-medium">
             Edit extracted fields
           </summary>
@@ -528,12 +542,16 @@
             ${fieldInputs}
           </div>
         </details>
-        <div class="flex items-center gap-3">
-          <button onclick="submitSingle(${idx})" id="submit-btn-${idx}"
-            class="bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold py-1.5 px-4 rounded">
-            Submit
-          </button>
-          <span id="submit-status-${idx}" class="text-xs text-gray-400"></span>
+        <div class="border-t border-gray-100 pt-3">
+          <div class="mb-1">${complianceLabel}</div>
+          ${violations ? `<ul class="list-none mb-2">${violations}</ul>` : ''}
+          <div class="flex items-center gap-3 mt-2">
+            <button onclick="submitSingle(${idx})" id="submit-btn-${idx}"
+              class="bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold py-1.5 px-4 rounded">
+              Submit
+            </button>
+            <span id="submit-status-${idx}" class="text-xs text-gray-400"></span>
+          </div>
         </div>
       `;
       container.appendChild(card);
@@ -606,6 +624,36 @@
         btn.textContent = 'Nothing submitted';
       }
     }
+
+    // ── Live server log ────────────────────────────────────────────────────
+    const _logEntries = document.getElementById('log-entries');
+    const _logDot     = document.getElementById('log-dot');
+    const _logBody    = document.getElementById('log-body');
+
+    function addLogEntry(msg) {
+      const line = document.createElement('div');
+      line.textContent = msg;
+      _logEntries.appendChild(line);
+      while (_logEntries.children.length > 200) _logEntries.removeChild(_logEntries.firstChild);
+      _logBody.scrollTop = _logBody.scrollHeight;
+    }
+
+    function clearLog() { _logEntries.innerHTML = ''; }
+
+    function _utcTimestamp() {
+      return new Date().toISOString().slice(11, 19) + ' UTC';
+    }
+
+    (function connectLog() {
+      const es = new EventSource('/api/logs/stream');
+      es.onopen    = () => { _logDot.className = 'w-2 h-2 rounded-full bg-green-400'; };
+      es.onmessage = (e) => { addLogEntry(e.data); };
+      es.onerror   = () => {
+        _logDot.className = 'w-2 h-2 rounded-full bg-red-400';
+        es.close();
+        setTimeout(connectLog, 3000);
+      };
+    })();
 
     // ── Phase 4: CSV download ──────────────────────────────────────────────
     function downloadCSV() {

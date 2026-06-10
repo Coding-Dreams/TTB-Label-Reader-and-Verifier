@@ -7,12 +7,15 @@ import base64
 import json
 import tempfile
 import threading
+import time
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 import httpx
 from pathlib import Path
 from PIL import Image, ImageEnhance, ImageOps
+
+from app.services import log_bus
 
 # Concurrency budget for tesseract subprocesses. Each pytesseract call spawns a
 # subprocess that loads tesseract + leptonica into memory; too many in flight at
@@ -230,8 +233,10 @@ async def extract_label_fields(
         else None
     )
     try:
+        await log_bus.emit("Files received — starting extraction")
         back_b64: Optional[str] = None
         if back_image_path and back_image_path.exists():
+            await log_bus.emit("Stitching front + back panels")
             stitched = await loop.run_in_executor(
                 None, _stitch_images, image_path, back_image_path
             )
@@ -245,7 +250,10 @@ async def extract_label_fields(
 
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
             image_b64 = await loop.run_in_executor(None, _encode_image, effective_path)
+            await log_bus.emit("Sending label to AI model (primary pass)…")
+            _t0 = time.monotonic()
             raw = await _call_ollama(client, image_b64, _FULL_PROMPT)
+            await log_bus.emit(f"AI model responded ({time.monotonic() - _t0:.1f}s) — parsing fields")
 
             parsed = _parse_json(raw)
             if debug_info is not None:
@@ -261,23 +269,28 @@ async def extract_label_fields(
             # falls back to the stitched/front image when there is no back panel.
             sulfite_b64 = await sulfite_b64_future if sulfite_b64_future is not None else image_b64
             if not data.get("contains_sulfites"):
+                await log_bus.emit("Secondary pass: checking for sulfite declaration")
                 sink: Optional[dict] = {} if debug_info is not None else None
                 result = await _extract_sulfites(client, sulfite_b64, _debug_sink=sink)
                 if debug_info is not None:
                     debug_info["secondary"]["sulfites"] = {"raw": sink.get("raw"), "accepted": result}
                 data["contains_sulfites"] = result
+                await log_bus.emit(f"  → sulfites: {result!r}")
 
             if not data.get("brand_name"):
+                await log_bus.emit("Secondary pass: extracting brand name")
                 sink = {} if debug_info is not None else None
                 result = await _extract_brand_name(client, image_b64, _debug_sink=sink)
                 if debug_info is not None:
                     debug_info["secondary"]["brand_name"] = {"raw": sink.get("raw"), "accepted": result}
                 data["brand_name"] = result
+                await log_bus.emit(f"  → brand name: {result!r}")
 
             # Always re-extract class_type from the front panel using the dedicated prompt.
             # The full prompt runs on the stitched image where each panel is half-width; the
             # dedicated function on the front panel alone is more reliable and applies equally
             # to every label regardless of what the full prompt returned.
+            await log_bus.emit("Secondary pass: classifying beverage type (Wine / Malt Beverage / Distilled Spirits)")
             front_b64 = await front_b64_future
             sink = {} if debug_info is not None else None
             class_from_front = await _extract_class_type(client, front_b64, _debug_sink=sink)
@@ -285,18 +298,22 @@ async def extract_label_fields(
                 debug_info["secondary"]["class_type"] = {"raw": sink.get("raw"), "accepted": class_from_front}
             if class_from_front:
                 data["class_type"] = class_from_front
+            await log_bus.emit(f"  → class type: {data.get('class_type')!r}")
 
             # If net_contents not found in main pass, try a targeted second-pass lookup
             if not data.get("net_contents"):
+                await log_bus.emit("Secondary pass: locating net contents / container volume")
                 net_b64 = back_b64 or image_b64
                 sink = {} if debug_info is not None else None
                 result = await _extract_net_contents(client, net_b64, _debug_sink=sink)
                 if debug_info is not None:
                     debug_info["secondary"]["net_contents"] = {"raw": sink.get("raw"), "accepted": result}
                 data["net_contents"] = result
+                await log_bus.emit(f"  → net contents: {result!r}")
 
             # If producer/bottler still missing, look for it specifically on the back panel
             if not data.get("producer_name_address"):
+                await log_bus.emit("Secondary pass: finding producer / bottler")
                 # Use the high-resolution + contrast-enhanced back panel encoding so
                 # small-print producer/bottler text (e.g. COLA17/18 'DC FLYNT MW SELECTIONS')
                 # remains legible to the VLM. Falls back to stitched image when no back exists.
@@ -309,10 +326,12 @@ async def extract_label_fields(
                     result = _IMPORTER_PREFIX_RE.sub('', result).strip()
                     result = _URL_SUFFIX_RE.sub('', result).strip()
                     data["producer_name_address"] = result or None
+                await log_bus.emit(f"  → producer: {data.get('producer_name_address')!r}")
 
             # If producer is a non-US address, the US importer was missed in the main pass —
             # run a dedicated importer lookup on the full stitched image
             if data.get("producer_name_address") and not _is_us_address(data["producer_name_address"]):
+                await log_bus.emit("Secondary pass: finding US importer (foreign producer detected)")
                 sink = {} if debug_info is not None else None
                 importer = await _extract_importer(client, image_b64)
                 if debug_info is not None:
@@ -321,13 +340,16 @@ async def extract_label_fields(
                     cleaned = _IMPORTER_PREFIX_RE.sub('', importer).strip()
                     cleaned = _URL_SUFFIX_RE.sub('', cleaned).strip()
                     data["producer_name_address"] = cleaned or importer
+                await log_bus.emit(f"  → US importer: {importer!r}")
 
             # OCR-based government_warning: exact uppercase check overrides VLM output.
             # Prevents both false positives (model normalises lowercase text to uppercase)
             # and false negatives (model misses small-print text the OCR can still read).
             # Dispatched after _postprocess and overlapped with the VLM secondary passes.
+            await log_bus.emit("OCR verification: scanning for GOVERNMENT WARNING text")
             gw_ocr = await gw_ocr_future
             data["government_warning"] = gw_ocr
+            await log_bus.emit(f"  → government warning: {gw_ocr!r}")
             if debug_info is not None:
                 debug_info["secondary"]["government_warning"] = {"raw": gw_ocr, "accepted": gw_ocr}
 
@@ -359,6 +381,7 @@ async def extract_label_fields(
                     }
                 data["contains_sulfites"] = None
 
+            await log_bus.emit("Extraction complete")
             return LabelFields(**data)
     finally:
         if stitched:
