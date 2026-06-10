@@ -443,10 +443,8 @@
       const fd = new FormData();
       fd.append('image', await downscaleImage(group.front.file));
       if (group.isPair) fd.append('back_image', await downscaleImage(group.back.file));
-      fd.append('_csrf_token', _csrfToken);
-
       try {
-        const res = await fetch('/extract', { method: 'POST', body: fd });
+        const res = await fetch('/extract', { method: 'POST', body: fd, headers: {'X-CSRF-Token': _csrfToken} });
         if (!res.ok) {
           let detail = `Server error (${res.status})`;
           try {

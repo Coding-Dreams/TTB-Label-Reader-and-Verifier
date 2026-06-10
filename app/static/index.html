@@ -428,9 +428,8 @@
       currentAbort = new AbortController();
       try {
         const fd0 = await buildFormData();
-        fd0.append('_csrf_token', _csrfToken);
-        const res = await fetch('/extract', { method: 'POST', body: fd0, signal: currentAbort.signal });
-        if (!res.ok) throw new Error((await res.json()).detail);
+        const res = await fetch('/extract', { method: 'POST', body: fd0, headers: {'X-CSRF-Token': _csrfToken}, signal: currentAbort.signal });
+        if (!res.ok) { const e = (await res.json()).detail; throw new Error(typeof e === 'string' ? e : JSON.stringify(e)); }
         const data = await res.json();
         FIELDS.forEach(f => {
           if (data[f]) {
@@ -467,11 +466,10 @@
       // those are treated as ground truth and checked for TTB compliance.
       const fd = new FormData();
       FIELDS.forEach(f => fd.append(f, document.getElementById(f).value));
-      fd.append('_csrf_token', _csrfToken);
 
       try {
-        const res = await fetch('/verify-fields', { method: 'POST', body: fd, signal });
-        if (!res.ok) throw new Error((await res.json()).detail);
+        const res = await fetch('/verify-fields', { method: 'POST', body: fd, headers: {'X-CSRF-Token': _csrfToken}, signal });
+        if (!res.ok) { const e = (await res.json()).detail; throw new Error(typeof e === 'string' ? e : JSON.stringify(e)); }
         renderResults(await res.json());
       } catch (err) {
         if (err.name !== 'AbortError') showError(err.message);

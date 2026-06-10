@@ -25,11 +25,18 @@ logger = logging.getLogger(__name__)
 # Shared helper — real client IP
 # ---------------------------------------------------------------------------
 def _real_ip(request: StarletteRequest) -> str:
-    """Return the real client IP, preferring proxy-forwarded headers over the
-    socket address (which is always the reverse proxy when one is in front)."""
+    """Return the real client IP behind Cloudflare + NGINX.
+
+    Priority:
+      1. CF-Connecting-IP  — set by Cloudflare to the true client IP
+      2. X-Forwarded-For   — first entry is the client when set by a trusted proxy
+      3. X-Real-IP         — set by NGINX, but equals Cloudflare's edge IP (not the client)
+      4. Socket address    — direct connection (no proxy)
+    """
     return (
-        request.headers.get("X-Real-IP")
+        request.headers.get("CF-Connecting-IP")
         or request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+        or request.headers.get("X-Real-IP")
         or (request.client.host if request.client else "unknown")
     )
 
@@ -151,13 +158,15 @@ class _CsrfMiddleware(BaseHTTPMiddleware):
         if not session_token:
             return await call_next(request)  # auth middleware will reject
 
-        # Accept CSRF token from header (JS fetch) or form field (HTML forms)
+        # Accept CSRF token from X-CSRF-Token header (JS fetch calls) or from
+        # a _csrf_token form field (plain HTML form submissions like logout).
+        # IMPORTANT: only parse the body for url-encoded forms — parsing
+        # multipart/form-data here consumes the upload stream and breaks
+        # downstream file handling in FastAPI route handlers.
         csrf_token = request.headers.get("X-CSRF-Token")
         if not csrf_token:
-            # For form submissions we need to peek at the body; Starlette
-            # caches it after first read so downstream handlers still work.
             content_type = request.headers.get("content-type", "")
-            if "application/x-www-form-urlencoded" in content_type or "multipart/form-data" in content_type:
+            if "application/x-www-form-urlencoded" in content_type:
                 form = await request.form()
                 csrf_token = form.get("_csrf_token")
 
