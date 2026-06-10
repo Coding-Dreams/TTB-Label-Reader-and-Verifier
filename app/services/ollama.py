@@ -79,7 +79,7 @@ Rules:
 - contains_sulfites: search ALL panels for any sulfite statement, accepting both American ('sulfite') and British ('sulphite') spellings. This includes BOTH positive declarations (e.g. "CONTAINS SULFITES", "Contains Sulphites", "Contains Sulfating Agents") AND negative declarations (e.g. "SULFITE FREE", "NO SULFITES ADDED", "Contains No Detectable Sulphites"); return the exact text if found, null if absent
 - producer_name_address: the winery, distillery, brewery, or bottler that made or bottled this product, with their address. For DOMESTIC US products this is the US producer/bottler (e.g. "BIG EASY BLENDS LLC, KENNER, LA"). For IMPORTED products put only the FOREIGN producer here (e.g. "CHATEAU DUPONT, BORDEAUX, FRANCE") — do NOT put the US importer here, use us_importer for that
 - us_importer: for IMPORTED products only — the US IMPORTER, BOTTLER, or DISTRIBUTOR with a United States city and state; look for phrases like "IMPORTED BY:", "SOLE IMPORTER:", "IMPORTED AND BOTTLED BY:", "DISTRIBUTED BY:" followed by a US company name and address (e.g. "IMPORTED BY: ACME SPIRITS, MIAMI, FL"); null for domestic US products or if no US importer is listed
-- country_of_origin: the country name, but ONLY if explicitly stated as the product's origin (e.g. "Product of Canada", "Made in Germany", "Imported from France"). Do NOT infer from the beverage category or style name — "American Red Wine" does NOT mean country_of_origin is "United States"
+- country_of_origin: the country name, but ONLY if explicitly stated as the product's origin (e.g. "Product of Canada", "Made in Germany", "Imported from France"). Do NOT infer from the beverage category or style name — "American Red Wine" does NOT mean country_of_origin is "United States". US territories (Puerto Rico, Guam, US Virgin Islands, American Samoa, Northern Mariana Islands) are part of the United States — treat them exactly like any US state and leave country_of_origin null for products made there
 - government_warning: return exactly "GOVERNMENT WARNING" (those two words, all uppercase) if the label contains that phrase in all uppercase letters; otherwise null. Do NOT copy the warning body text and IGNORE the warning body text. ONLY focus on the GOVERNMENT WARNING.
 
 Example output for an imported cognac label:
@@ -641,6 +641,13 @@ _US_LOCATIONS = frozenset({
     "pennsylvania", "rhode island", "south carolina", "south dakota", "tennessee",
     "texas", "utah", "vermont", "virginia", "washington", "washington state",
     "west virginia", "wisconsin", "wyoming", "district of columbia",
+    # US territories — treated as domestic (same as any US state)
+    "puerto rico", "pr",
+    "guam", "gu",
+    "us virgin islands", "u.s. virgin islands", "united states virgin islands",
+    "american virgin islands", "vi",
+    "american samoa", "as",
+    "northern mariana islands", "commonwealth of the northern mariana islands", "cnmi", "mp",
 })
 
 # Words that appear in beverage types — used to detect if class_type is actually a product name
@@ -689,6 +696,7 @@ _US_ADDRESS_TAIL_RE = re.compile(
     r',\s*(?:'
     r'AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|'
     r'NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY|DC|'
+    r'PR|GU|VI|AS|MP|'
     r'Alabama|Alaska|Arizona|Arkansas|California|Colorado|Connecticut|Delaware|'
     r'Florida|Georgia|Hawaii|Idaho|Illinois|Indiana|Iowa|Kansas|Kentucky|Louisiana|'
     r'Maine|Maryland|Massachusetts|Michigan|Minnesota|Mississippi|Missouri|Montana|'
@@ -696,7 +704,8 @@ _US_ADDRESS_TAIL_RE = re.compile(
     r'North\s+Carolina|North\s+Dakota|Ohio|Oklahoma|Oregon|Pennsylvania|'
     r'Rhode\s+Island|South\s+Carolina|South\s+Dakota|Tennessee|Texas|Utah|'
     r'Vermont|Virginia|Washington|West\s+Virginia|Wisconsin|Wyoming|'
-    r'District\s+of\s+Columbia'
+    r'District\s+of\s+Columbia|'
+    r'Puerto\s+Rico|Guam|American\s+Samoa|Northern\s+Mariana\s+Islands'
     r')(?:\s+\d{5}(?:-\d{4})?)?\s*$',
     re.IGNORECASE
 )
