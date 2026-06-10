@@ -155,9 +155,19 @@ def login_page():
     return FileResponse("app/static/login.html")
 
 
+def _real_ip(request: StarletteRequest) -> str:
+    """Return the real client IP, preferring proxy-forwarded headers over the
+    socket address (which is always the reverse proxy when one is in front)."""
+    return (
+        request.headers.get("X-Real-IP")
+        or request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+        or (request.client.host if request.client else "unknown")
+    )
+
+
 @app.post("/login")
 async def login(request: StarletteRequest, password: str = Form(...)):
-    ip = request.client.host if request.client else "unknown"
+    ip = _real_ip(request)
     if auth.is_locked_out(ip):
         return RedirectResponse("/login?error=locked", status_code=303)
     if not auth.verify_password(password):
