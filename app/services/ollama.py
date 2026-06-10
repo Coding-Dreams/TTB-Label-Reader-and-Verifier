@@ -49,7 +49,8 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 MODEL = "qwen2.5vl:7b"
 TIMEOUT = 120.0
 
-_MAX_SIDE = 768  # cap large uploads before encoding
+_MAX_SIDE = 768      # cap large uploads before encoding
+_PRE_OSD_MAX = 2000  # pre-downscale before OSD — orientation detection doesn't need full resolution
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +145,10 @@ def _encode_image(
     with Image.open(image_path) as img:
         if img.mode in ("RGBA", "LA", "P"):
             img = img.convert("RGB")
+        w0, h0 = img.size
+        if max(w0, h0) > _PRE_OSD_MAX:
+            s = _PRE_OSD_MAX / max(w0, h0)
+            img = img.resize((int(w0 * s), int(h0 * s)), Image.LANCZOS)
         img = _auto_orient(img, back_panel=back_panel)
         img = _crop_to_content(img)
         if enhance:
