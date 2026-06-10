@@ -156,10 +156,17 @@ def login_page():
 
 
 @app.post("/login")
-async def login(password: str = Form(...)):
+async def login(request: StarletteRequest, password: str = Form(...)):
+    ip = request.client.host if request.client else "unknown"
+    if auth.is_locked_out(ip):
+        return RedirectResponse("/login?error=locked", status_code=303)
     if not auth.verify_password(password):
+        auth.record_failure(ip)
+        remaining = auth._MAX_FAILURES - len(auth._failures.get(ip, []))
+        await log_bus.emit(f"Failed login attempt from {ip} ({remaining} attempt(s) remaining)")
         return RedirectResponse("/login?error=1", status_code=303)
-    await log_bus.emit("User signed in")
+    auth.reset_failures(ip)
+    await log_bus.emit(f"User signed in from {ip}")
     response = RedirectResponse("/", status_code=303)
     response.set_cookie(
         auth.COOKIE_NAME,

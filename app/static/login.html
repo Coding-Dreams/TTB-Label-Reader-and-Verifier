@@ -13,6 +13,9 @@
     <div id="error-msg" class="hidden mb-4 text-sm text-red-600 bg-red-50 border border-red-200 rounded p-3">
       Incorrect password — please try again.
     </div>
+    <div id="locked-msg" class="hidden mb-4 text-sm text-red-600 bg-red-50 border border-red-200 rounded p-3">
+      Too many failed attempts — try again in 10 minutes.
+    </div>
     <form method="POST" action="/login">
       <label class="block text-xs text-gray-500 mb-1">Password</label>
       <input type="password" name="password" autofocus
@@ -24,7 +27,10 @@
     </form>
   </div>
   <script>
-    if (new URLSearchParams(location.search).get('error')) {
+    const _err = new URLSearchParams(location.search).get('error');
+    if (_err === 'locked') {
+      document.getElementById('locked-msg').classList.remove('hidden');
+    } else if (_err) {
       document.getElementById('error-msg').classList.remove('hidden');
     }
   </script>
