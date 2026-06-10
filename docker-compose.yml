@@ -47,8 +47,8 @@ services:
       # (useful for local development). Set SESSION_SECRET to a long random string
       # so sessions survive container restarts — generate one with:
       #   python3 -c "import secrets; print(secrets.token_hex(32))"
-      - APP_PASSWORD=
-      - SESSION_SECRET=
+      - APP_PASSWORD=${APP_PASSWORD}
+      - SESSION_SECRET=${SESSION_SECRET}
     depends_on:
       ollama:
         condition: service_healthy

@@ -16,7 +16,8 @@
     <a href="/" class="font-semibold text-blue-600">Single Label</a>
     <a href="/batch-upload" class="text-gray-600 hover:text-blue-600">Batch Labels</a>
     <a href="/history" class="text-gray-600 hover:text-blue-600">History (WIP)</a>
-    <form method="POST" action="/logout" class="ml-auto">
+    <form method="POST" action="/logout" class="ml-auto" id="logout-form">
+      <input type="hidden" name="_csrf_token" id="logout-csrf" />
       <button type="submit" class="text-xs text-gray-400 hover:text-gray-700">Sign out</button>
     </form>
   </nav>
@@ -210,6 +211,19 @@
   </div>
 
   <script>
+    // ---------- CSRF token ----------
+    let _csrfToken = '';
+    async function fetchCsrfToken() {
+      try {
+        const res = await fetch('/api/csrf-token');
+        if (res.ok) {
+          _csrfToken = (await res.json()).csrf_token;
+          document.getElementById('logout-csrf').value = _csrfToken;
+        }
+      } catch {}
+    }
+    fetchCsrfToken();
+
     const FIELDS = ['brand_name','class_type','alcohol_content','net_contents','producer_name_address','country_of_origin','government_warning','contains_sulfites'];
     const FIELD_LABELS = {
       brand_name: 'Brand Name', class_type: 'Class / Type', alcohol_content: 'Alcohol Content',
@@ -413,7 +427,9 @@
       clearFields();
       currentAbort = new AbortController();
       try {
-        const res = await fetch('/extract', { method: 'POST', body: await buildFormData(), signal: currentAbort.signal });
+        const fd0 = await buildFormData();
+        fd0.append('_csrf_token', _csrfToken);
+        const res = await fetch('/extract', { method: 'POST', body: fd0, signal: currentAbort.signal });
         if (!res.ok) throw new Error((await res.json()).detail);
         const data = await res.json();
         FIELDS.forEach(f => {
@@ -451,6 +467,7 @@
       // those are treated as ground truth and checked for TTB compliance.
       const fd = new FormData();
       FIELDS.forEach(f => fd.append(f, document.getElementById(f).value));
+      fd.append('_csrf_token', _csrfToken);
 
       try {
         const res = await fetch('/verify-fields', { method: 'POST', body: fd, signal });

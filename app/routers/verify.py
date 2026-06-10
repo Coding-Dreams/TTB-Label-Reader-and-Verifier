@@ -1,4 +1,5 @@
 import io
+import logging
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -15,6 +16,7 @@ from app.services.db import save_verification
 from app.services.ollama import extract_label_fields
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 _UPLOAD_DIR = Path("data/uploads")
 _UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -76,8 +78,9 @@ async def extract(
         await log_bus.emit("Error: Ollama service unavailable")
         raise HTTPException(status_code=503, detail="Verification service unavailable — is Ollama running?")
     except Exception as e:
-        await log_bus.emit(f"Error: {e}")
-        raise HTTPException(status_code=422, detail=f"Extraction failed: {str(e)}")
+        logger.exception("Extraction failed")
+        await log_bus.emit("Error: extraction failed — check server logs")
+        raise HTTPException(status_code=422, detail="Extraction failed — please try again")
     finally:
         tmp.unlink(missing_ok=True)
         if tmp_back:
@@ -205,8 +208,9 @@ async def verify(
         await log_bus.emit("Error: Ollama service unavailable")
         raise HTTPException(status_code=503, detail="Verification service unavailable — is Ollama running?")
     except Exception as e:
-        await log_bus.emit(f"Error: {e}")
-        raise HTTPException(status_code=422, detail=f"Verification failed: {str(e)}")
+        logger.exception("Verification failed")
+        await log_bus.emit("Error: verification failed — check server logs")
+        raise HTTPException(status_code=422, detail="Verification failed — please try again")
     finally:
         tmp.unlink(missing_ok=True)
         if tmp_back:

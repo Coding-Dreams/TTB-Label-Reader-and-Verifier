@@ -15,7 +15,8 @@
     <a href="/" class="text-gray-600 hover:text-blue-600">Single Label</a>
     <a href="/batch-upload" class="font-semibold text-blue-600">Batch Labels</a>
     <a href="/history" class="text-gray-600 hover:text-blue-600">History (WIP)</a>
-    <form method="POST" action="/logout" class="ml-auto">
+    <form method="POST" action="/logout" class="ml-auto" id="logout-form">
+      <input type="hidden" name="_csrf_token" id="logout-csrf" />
       <button type="submit" class="text-xs text-gray-400 hover:text-gray-700">Sign out</button>
     </form>
   </nav>
@@ -115,6 +116,19 @@
   </div>
 
   <script>
+    // ── CSRF token ─────────────────────────────────────────────────────────
+    let _csrfToken = '';
+    async function fetchCsrfToken() {
+      try {
+        const res = await fetch('/api/csrf-token');
+        if (res.ok) {
+          _csrfToken = (await res.json()).csrf_token;
+          document.getElementById('logout-csrf').value = _csrfToken;
+        }
+      } catch {}
+    }
+    fetchCsrfToken();
+
     // ── State ──────────────────────────────────────────────────────────────
     let currentGroups = { pairs: [], standalones: [], imageCount: 0 };
     let extractionResults = [];
@@ -429,6 +443,7 @@
       const fd = new FormData();
       fd.append('image', await downscaleImage(group.front.file));
       if (group.isPair) fd.append('back_image', await downscaleImage(group.back.file));
+      fd.append('_csrf_token', _csrfToken);
 
       try {
         const res = await fetch('/extract', { method: 'POST', body: fd });
@@ -585,7 +600,7 @@
       try {
         const resp = await fetch('/batch/save-group', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': _csrfToken },
           body: JSON.stringify({
             image_filename:      result.frontFilename,
             back_image_filename: result.backFilename || null,

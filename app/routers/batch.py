@@ -1,3 +1,4 @@
+import logging
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
@@ -7,6 +8,7 @@ from app.services.compliance import check_compliance
 from app.services.db import save_verification
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 _VALID_EXTRACTED_KEYS = frozenset({
     "brand_name", "class_type", "alcohol_content", "net_contents",
@@ -53,5 +55,6 @@ def save_group(body: SaveGroupRequest):
             batch_id=body.batch_id,
         )
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to save: {exc}")
+        logger.exception("Failed to save batch group")
+        raise HTTPException(status_code=500, detail="Failed to save — please try again")
     return {"ok": True}

@@ -12,7 +12,8 @@
     <a href="/" class="text-gray-600 hover:text-blue-600">Single Label</a>
     <a href="/batch-upload" class="text-gray-600 hover:text-blue-600">Batch Labels</a>
     <a href="/history" class="font-semibold text-blue-600">History (WIP)</a>
-    <form method="POST" action="/logout" class="ml-auto">
+    <form method="POST" action="/logout" class="ml-auto" id="logout-form">
+      <input type="hidden" name="_csrf_token" id="logout-csrf" />
       <button type="submit" class="text-xs text-gray-400 hover:text-gray-700">Sign out</button>
     </form>
   </nav>
@@ -69,6 +70,18 @@
   </main>
 
   <script>
+    // ── CSRF token ─────────────────────────────────────────────────────────
+    let _csrfToken = '';
+    (async function fetchCsrfToken() {
+      try {
+        const res = await fetch('/api/csrf-token');
+        if (res.ok) {
+          _csrfToken = (await res.json()).csrf_token;
+          document.getElementById('logout-csrf').value = _csrfToken;
+        }
+      } catch {}
+    })();
+
     const FIELD_LABELS = {
       brand_name: 'Brand Name', class_type: 'Class / Type', alcohol_content: 'Alcohol Content',
       net_contents: 'Net Contents', producer_name_address: 'Producer Name & Address',

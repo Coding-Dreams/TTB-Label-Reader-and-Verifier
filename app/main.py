@@ -19,17 +19,24 @@ from app.services.pdf_export import generate_filled_cola
 
 app = FastAPI(title="TTB Label Verification")
 
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Shared helper — real client IP
+# ---------------------------------------------------------------------------
+def _real_ip(request: StarletteRequest) -> str:
+    """Return the real client IP, preferring proxy-forwarded headers over the
+    socket address (which is always the reverse proxy when one is in front)."""
+    return (
+        request.headers.get("X-Real-IP")
+        or request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+        or (request.client.host if request.client else "unknown")
+    )
+
+
 # ---------------------------------------------------------------------------
 # Security headers — applied to every response
 # ---------------------------------------------------------------------------
-# CSP notes:
-#   - 'unsafe-inline' for script-src is required because all JS lives in
-#     inline <script> blocks. Tailwind CDN is the only external script source.
-#   - 'unsafe-inline' for style-src is required because Tailwind injects
-#     utility classes as inline <style> at runtime.
-#   - blob: in img-src covers URL.createObjectURL() used for image previews.
-#   - connect-src 'self' ensures fetch/XHR cannot reach arbitrary hosts even
-#     if an XSS payload were injected.
 _CSP = (
     "default-src 'self'; "
     "script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; "
@@ -53,10 +60,7 @@ class _SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 # ---------------------------------------------------------------------------
-# Body size pre-check — reject oversized requests before python-multipart
-# buffers the entire upload (Content-Length must be present; honest clients
-# always send it for multipart uploads). Two images at 20 MB each plus
-# multipart overhead → 50 MB ceiling.
+# Body size pre-check
 # ---------------------------------------------------------------------------
 _MAX_BODY_BYTES = 50 * 1024 * 1024  # 50 MB
 
@@ -72,21 +76,40 @@ class _BodySizeLimitMiddleware(BaseHTTPMiddleware):
                         media_type="application/json",
                     )
             except ValueError:
-                pass  # malformed header — let normal handling deal with it
+                pass
         return await call_next(request)
 
 # ---------------------------------------------------------------------------
-# Rate limiting — 200 requests per minute per IP on write endpoints
+# Rate limiting — per real client IP on write endpoints
 # ---------------------------------------------------------------------------
 _RATE_LIMIT_PATHS = {"/extract", "/verify", "/verify-fields", "/batch/save-group"}
 _RATE_WINDOW = 60   # seconds
-_RATE_MAX = 6000     # requests per window (99-image batch = ~200 requests; 600 gives headroom)
+_RATE_MAX = 600     # requests per window
+
+class _RateLimitMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app):
+        super().__init__(app)
+        self._counts: dict[str, list[float]] = defaultdict(list)
+        self._lock = Lock()
+
+    async def dispatch(self, request: StarletteRequest, call_next):
+        if request.url.path in _RATE_LIMIT_PATHS:
+            ip = _real_ip(request)
+            now = time.monotonic()
+            with self._lock:
+                stamps = self._counts[ip]
+                self._counts[ip] = [t for t in stamps if now - t < _RATE_WINDOW]
+                if len(self._counts[ip]) >= _RATE_MAX:
+                    return Response(
+                        content='{"detail":"Rate limit exceeded — please wait before trying again"}',
+                        status_code=429,
+                        media_type="application/json",
+                    )
+                self._counts[ip].append(now)
+        return await call_next(request)
 
 # ---------------------------------------------------------------------------
 # Authentication — session cookie gate
-# Only active when APP_PASSWORD env var is set. All routes except /login and
-# /static/* require a valid signed session cookie; unauthenticated API/POST
-# requests get JSON 401, page requests get redirected to /login.
 # ---------------------------------------------------------------------------
 class _AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: StarletteRequest, call_next):
@@ -107,62 +130,84 @@ class _AuthMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
-class _RateLimitMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app):
-        super().__init__(app)
-        self._counts: dict[str, list[float]] = defaultdict(list)
-        self._lock = Lock()
+# ---------------------------------------------------------------------------
+# CSRF protection — all non-GET/HEAD requests from authenticated users must
+# carry a valid CSRF token (except /login which has no session yet).
+# Token is checked from the X-CSRF-Token header (fetch requests) or the
+# _csrf_token form field (HTML form submissions).
+# ---------------------------------------------------------------------------
+_CSRF_EXEMPT = {"/login"}
 
+class _CsrfMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: StarletteRequest, call_next):
-        if request.url.path in _RATE_LIMIT_PATHS:
-            ip = (request.client.host if request.client else "unknown")
-            now = time.monotonic()
-            with self._lock:
-                stamps = self._counts[ip]
-                self._counts[ip] = [t for t in stamps if now - t < _RATE_WINDOW]
-                if len(self._counts[ip]) >= _RATE_MAX:
-                    return Response(
-                        content='{"detail":"Rate limit exceeded — please wait before trying again"}',
-                        status_code=429,
-                        media_type="application/json",
-                    )
-                self._counts[ip].append(now)
+        if not auth.auth_enabled():
+            return await call_next(request)
+        if request.method in ("GET", "HEAD", "OPTIONS"):
+            return await call_next(request)
+        if request.url.path in _CSRF_EXEMPT:
+            return await call_next(request)
+
+        session_token = request.cookies.get(auth.COOKIE_NAME)
+        if not session_token:
+            return await call_next(request)  # auth middleware will reject
+
+        # Accept CSRF token from header (JS fetch) or form field (HTML forms)
+        csrf_token = request.headers.get("X-CSRF-Token")
+        if not csrf_token:
+            # For form submissions we need to peek at the body; Starlette
+            # caches it after first read so downstream handlers still work.
+            content_type = request.headers.get("content-type", "")
+            if "application/x-www-form-urlencoded" in content_type or "multipart/form-data" in content_type:
+                form = await request.form()
+                csrf_token = form.get("_csrf_token")
+
+        if not auth.verify_csrf_token(session_token, csrf_token):
+            if request.headers.get("accept", "").startswith("text/html"):
+                return RedirectResponse("/login", status_code=303)
+            return Response(
+                content='{"detail":"CSRF validation failed"}',
+                status_code=403,
+                media_type="application/json",
+            )
         return await call_next(request)
 
+
 # Middleware is applied innermost-first: security headers wrap everything,
-# rate limiter is next, body size check is next, auth gate is outermost
-# (runs first on requests — rejects unauthenticated traffic before any
-# body parsing or rate-limit accounting).
+# rate limiter is next, body size check is next, CSRF is next, auth gate is
+# outermost (runs first on requests).
 app.add_middleware(_SecurityHeadersMiddleware)
 app.add_middleware(_RateLimitMiddleware)
 app.add_middleware(_BodySizeLimitMiddleware)
+app.add_middleware(_CsrfMiddleware)
 app.add_middleware(_AuthMiddleware)
 
-logger = logging.getLogger(__name__)
 
 @app.on_event("startup")
 async def startup():
     init_db()
     asyncio.create_task(_warmup_model())
 
+
 app.include_router(verify.router)
 app.include_router(batch.router)
 
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
+
+# ---------------------------------------------------------------------------
+# CSRF token endpoint — JS calls this to get a token for fetch requests
+# ---------------------------------------------------------------------------
+@app.get("/api/csrf-token")
+def get_csrf_token(request: StarletteRequest):
+    session_token = request.cookies.get(auth.COOKIE_NAME)
+    if not session_token or not auth.verify_session_token(session_token):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return {"csrf_token": auth.make_csrf_token(session_token)}
+
+
 @app.get("/login")
 def login_page():
     return FileResponse("app/static/login.html")
-
-
-def _real_ip(request: StarletteRequest) -> str:
-    """Return the real client IP, preferring proxy-forwarded headers over the
-    socket address (which is always the reverse proxy when one is in front)."""
-    return (
-        request.headers.get("X-Real-IP")
-        or request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
-        or (request.client.host if request.client else "unknown")
-    )
 
 
 @app.post("/login")
@@ -177,19 +222,23 @@ async def login(request: StarletteRequest, password: str = Form(...)):
         return RedirectResponse("/login?error=1", status_code=303)
     auth.reset_failures(ip)
     await log_bus.emit(f"User signed in from {ip}")
+    session_token = auth.make_session_token()
     response = RedirectResponse("/", status_code=303)
     response.set_cookie(
         auth.COOKIE_NAME,
-        auth.make_session_token(),
+        session_token,
         httponly=True,
         samesite="lax",
+        secure=True,
         max_age=86400 * 30,  # 30 days
     )
     return response
 
 
 @app.post("/logout")
-async def logout():
+async def logout(request: StarletteRequest):
+    token = request.cookies.get(auth.COOKIE_NAME)
+    auth.revoke_session_token(token)
     response = RedirectResponse("/login", status_code=303)
     response.delete_cookie(auth.COOKIE_NAME)
     return response
@@ -249,8 +298,8 @@ def get_cola_pdf(verification_id: int):
     extracted = json.loads(record["extracted"])
     try:
         pdf_bytes = generate_filled_cola(extracted)
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except FileNotFoundError:
+        raise HTTPException(status_code=500, detail="COLA template not found")
     filename = f"COLA_{verification_id}.pdf"
     return Response(
         content=pdf_bytes,
