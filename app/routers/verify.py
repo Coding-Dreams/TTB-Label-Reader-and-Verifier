@@ -1,10 +1,11 @@
-import shutil
+import io
 import uuid
 from pathlib import Path
 from typing import Optional
 
 import httpx
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from PIL import Image
 
 from app.models.label import LabelFields
 from app.services.comparator import compare_label
@@ -17,12 +18,34 @@ router = APIRouter()
 _UPLOAD_DIR = Path("data/uploads")
 _UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
+_ALLOWED_IMAGE_FORMATS = {"JPEG", "PNG", "WEBP", "TIFF", "BMP"}
+_MAX_UPLOAD_MB = 20
+_MAX_UPLOAD_BYTES = _MAX_UPLOAD_MB * 1024 * 1024
+
 
 def _save_upload(upload: UploadFile, prefix: str) -> Path:
+    """Read, validate (type + size), then write to disk. Raises HTTPException on bad input."""
+    data = upload.file.read(_MAX_UPLOAD_BYTES + 1)
+    if len(data) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large — maximum {_MAX_UPLOAD_MB} MB per image",
+        )
+    try:
+        with Image.open(io.BytesIO(data)) as img:
+            fmt = img.format
+        if fmt not in _ALLOWED_IMAGE_FORMATS:
+            raise HTTPException(
+                status_code=415,
+                detail=f"Unsupported image format '{fmt}'. Allowed: JPEG, PNG, WebP, TIFF, BMP",
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=415, detail="File does not appear to be a valid image")
     safe_name = Path(upload.filename or "upload").name
     dest = _UPLOAD_DIR / f"{prefix}_{uuid.uuid4()}_{safe_name}"
-    with open(dest, "wb") as f:
-        shutil.copyfileobj(upload.file, f)
+    dest.write_bytes(data)
     return dest
 
 

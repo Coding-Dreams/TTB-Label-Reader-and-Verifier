@@ -206,6 +206,13 @@
     };
     const STATUS_ICON = { pass: '✓', fail: '✗', warn: '⚠', not_detected: '—' };
 
+    function escapeHtml(s) {
+      if (s == null) return '';
+      return String(s)
+        .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;').replaceAll("'", '&#39;');
+    }
+
     // ---------- Auto-resize textareas ----------
     function autoResize(el) {
       el.style.height = 'auto';
@@ -447,7 +454,7 @@
       } else {
         badge.textContent = `${violations.length} VIOLATION${violations.length === 1 ? '' : 'S'}`;
         badge.className = 'text-xs px-2 py-0.5 rounded font-normal bg-red-100 text-red-700';
-        ul.innerHTML = violations.map(v => `<li><strong>${v.label}:</strong> ${v.message}</li>`).join('');
+        ul.innerHTML = violations.map(v => `<li><strong>${escapeHtml(v.label)}:</strong> ${escapeHtml(v.message)}</li>`).join('');
         ok.classList.add('hidden');
         resetHighlights();
         violations.forEach(v => markField(v.field, true));
@@ -459,7 +466,7 @@
         <tr class="border-b last:border-0">
           <td class="py-2 text-gray-700">${FIELD_LABELS[f.field] || f.field}</td>
           <td class="py-2 ${STATUS_STYLE[f.status]}">${STATUS_ICON[f.status]} ${f.status.replace('_', ' ')}</td>
-          <td class="py-2 text-gray-600 text-xs max-w-xs truncate">${f.submitted_value ?? '—'}</td>
+          <td class="py-2 text-gray-600 text-xs max-w-xs truncate">${escapeHtml(f.submitted_value ?? '—')}</td>
         </tr>`).join('');
       document.getElementById('results').classList.remove('hidden');
     }
