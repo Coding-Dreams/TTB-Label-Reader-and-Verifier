@@ -216,6 +216,14 @@ async def extract_label_fields(
     sulfite_present_future = loop.run_in_executor(
         None, _label_mentions_sulfite_ocr, image_path, back_image_path
     )
+    # Kick off secondary-pass image encodings now — they only need the original paths
+    # and will complete during the main VLM call (~10–30 s), making them effectively free.
+    front_b64_future = loop.run_in_executor(None, _encode_image, image_path, 1024)
+    sulfite_b64_future = (
+        loop.run_in_executor(None, _encode_image, back_image_path, 1024, True, True)
+        if back_image_path and back_image_path.exists()
+        else None
+    )
     try:
         back_b64: Optional[str] = None
         if back_image_path and back_image_path.exists():
@@ -244,15 +252,9 @@ async def extract_label_fields(
                 debug_info["after_postprocess"] = dict(data)
                 debug_info["secondary"] = {}
 
-            # Back panel often carries sulfite statements and regulatory text.
-            # Encode at higher resolution for the dedicated sulfite scan — small-print
-            # declarations are frequently missed at the default 768px.
-            if back_image_path and back_image_path.exists():
-                sulfite_b64 = await loop.run_in_executor(
-                    None, _encode_image, back_image_path, 1024, True, True
-                )
-            else:
-                sulfite_b64 = image_b64
+            # Await the pre-started back-panel encoding (1024 px, contrast-enhanced);
+            # falls back to the stitched/front image when there is no back panel.
+            sulfite_b64 = await sulfite_b64_future if sulfite_b64_future is not None else image_b64
             if not data.get("contains_sulfites"):
                 sink: Optional[dict] = {} if debug_info is not None else None
                 result = await _extract_sulfites(client, sulfite_b64, _debug_sink=sink)
@@ -271,7 +273,7 @@ async def extract_label_fields(
             # The full prompt runs on the stitched image where each panel is half-width; the
             # dedicated function on the front panel alone is more reliable and applies equally
             # to every label regardless of what the full prompt returned.
-            front_b64 = await loop.run_in_executor(None, _encode_image, image_path, 1024)
+            front_b64 = await front_b64_future
             sink = {} if debug_info is not None else None
             class_from_front = await _extract_class_type(client, front_b64, _debug_sink=sink)
             if debug_info is not None:
