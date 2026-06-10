@@ -43,6 +43,12 @@ services:
       # raise on machines with ample RAM/cores. Lower if libleptonica segfaults
       # appear in dmesg under load.
       - OCR_PARALLELISM=6
+      # Password protecting the web UI. Leave APP_PASSWORD empty to disable auth
+      # (useful for local development). Set SESSION_SECRET to a long random string
+      # so sessions survive container restarts — generate one with:
+      #   python3 -c "import secrets; print(secrets.token_hex(32))"
+      - APP_PASSWORD=
+      - SESSION_SECRET=
     depends_on:
       ollama:
         condition: service_healthy
