@@ -5,14 +5,14 @@ import time
 from collections import defaultdict
 from threading import Lock
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Form, HTTPException
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, RedirectResponse, Response, StreamingResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request as StarletteRequest
 
 from app.routers import verify, batch
-from app.services import log_bus
+from app.services import auth, log_bus
 from app.services.db import init_db, get_verifications, get_verification
 from app.services.ollama import _warmup_model
 from app.services.pdf_export import generate_filled_cola
@@ -82,6 +82,31 @@ _RATE_LIMIT_PATHS = {"/extract", "/verify", "/verify-fields", "/batch/save-group
 _RATE_WINDOW = 60   # seconds
 _RATE_MAX = 6000     # requests per window (99-image batch = ~200 requests; 600 gives headroom)
 
+# ---------------------------------------------------------------------------
+# Authentication — session cookie gate
+# Only active when APP_PASSWORD env var is set. All routes except /login and
+# /static/* require a valid signed session cookie; unauthenticated API/POST
+# requests get JSON 401, page requests get redirected to /login.
+# ---------------------------------------------------------------------------
+class _AuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: StarletteRequest, call_next):
+        if not auth.auth_enabled():
+            return await call_next(request)
+        path = request.url.path
+        if path == "/login" or path.startswith("/static/"):
+            return await call_next(request)
+        token = request.cookies.get(auth.COOKIE_NAME)
+        if not auth.verify_session_token(token):
+            if path.startswith("/api/") or request.method not in ("GET", "HEAD"):
+                return Response(
+                    content='{"detail":"Unauthorized"}',
+                    status_code=401,
+                    media_type="application/json",
+                )
+            return RedirectResponse("/login", status_code=303)
+        return await call_next(request)
+
+
 class _RateLimitMiddleware(BaseHTTPMiddleware):
     def __init__(self, app):
         super().__init__(app)
@@ -105,10 +130,13 @@ class _RateLimitMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 # Middleware is applied innermost-first: security headers wrap everything,
-# rate limiter is next, body size check is outermost (runs first on requests).
+# rate limiter is next, body size check is next, auth gate is outermost
+# (runs first on requests — rejects unauthenticated traffic before any
+# body parsing or rate-limit accounting).
 app.add_middleware(_SecurityHeadersMiddleware)
 app.add_middleware(_RateLimitMiddleware)
 app.add_middleware(_BodySizeLimitMiddleware)
+app.add_middleware(_AuthMiddleware)
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +149,34 @@ app.include_router(verify.router)
 app.include_router(batch.router)
 
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
+
+@app.get("/login")
+def login_page():
+    return FileResponse("app/static/login.html")
+
+
+@app.post("/login")
+async def login(password: str = Form(...)):
+    if not auth.verify_password(password):
+        return RedirectResponse("/login?error=1", status_code=303)
+    await log_bus.emit("User signed in")
+    response = RedirectResponse("/", status_code=303)
+    response.set_cookie(
+        auth.COOKIE_NAME,
+        auth.make_session_token(),
+        httponly=True,
+        samesite="lax",
+        max_age=86400 * 30,  # 30 days
+    )
+    return response
+
+
+@app.post("/logout")
+async def logout():
+    response = RedirectResponse("/login", status_code=303)
+    response.delete_cookie(auth.COOKIE_NAME)
+    return response
+
 
 @app.get("/")
 def index():

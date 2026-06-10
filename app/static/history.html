@@ -8,10 +8,13 @@
 </head>
 <body class="bg-gray-50 min-h-screen">
 
-  <nav class="bg-white border-b border-gray-200 px-6 py-3 flex gap-6">
+  <nav class="bg-white border-b border-gray-200 px-6 py-3 flex items-center gap-6">
     <a href="/" class="text-gray-600 hover:text-blue-600">Single Label</a>
     <a href="/batch-upload" class="text-gray-600 hover:text-blue-600">Batch Labels</a>
     <a href="/history" class="font-semibold text-blue-600">History (WIP)</a>
+    <form method="POST" action="/logout" class="ml-auto">
+      <button type="submit" class="text-xs text-gray-400 hover:text-gray-700">Sign out</button>
+    </form>
   </nav>
 
   <main class="max-w-6xl mx-auto p-6">
