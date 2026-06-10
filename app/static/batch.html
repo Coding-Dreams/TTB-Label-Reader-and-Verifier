@@ -14,7 +14,7 @@
   <nav class="bg-white border-b border-gray-200 px-6 py-3 flex gap-6">
     <a href="/" class="text-gray-600 hover:text-blue-600">Single Label</a>
     <a href="/batch-upload" class="font-semibold text-blue-600">Batch Labels</a>
-    <a href="/history" class="text-gray-600 hover:text-blue-600">History</a>
+    <a href="/history" class="text-gray-600 hover:text-blue-600">History (WIP)</a>
   </nav>
 
   <main class="max-w-4xl mx-auto p-6">
@@ -634,7 +634,6 @@
       const line = document.createElement('div');
       line.textContent = msg;
       _logEntries.appendChild(line);
-      while (_logEntries.children.length > 200) _logEntries.removeChild(_logEntries.firstChild);
       _logBody.scrollTop = _logBody.scrollHeight;
     }
 
