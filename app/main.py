@@ -79,7 +79,7 @@ class _BodySizeLimitMiddleware(BaseHTTPMiddleware):
 # ---------------------------------------------------------------------------
 _RATE_LIMIT_PATHS = {"/extract", "/verify", "/verify-fields", "/batch/save-group"}
 _RATE_WINDOW = 60   # seconds
-_RATE_MAX = 200     # requests per window
+_RATE_MAX = 6000     # requests per window (99-image batch = ~200 requests; 600 gives headroom)
 
 class _RateLimitMiddleware(BaseHTTPMiddleware):
     def __init__(self, app):
