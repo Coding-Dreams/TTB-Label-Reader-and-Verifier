@@ -81,14 +81,14 @@ async def extract(
 
 @router.post("/verify-fields")
 async def verify_fields(
-    brand_name: str = Form(default=""),
-    class_type: str = Form(default=""),
-    alcohol_content: str = Form(default=""),
-    net_contents: str = Form(default=""),
-    producer_name_address: str = Form(default=""),
-    country_of_origin: str = Form(default=""),
-    government_warning: str = Form(default=""),
-    contains_sulfites: str = Form(default=""),
+    brand_name: str = Form(default="", max_length=512),
+    class_type: str = Form(default="", max_length=128),
+    alcohol_content: str = Form(default="", max_length=128),
+    net_contents: str = Form(default="", max_length=128),
+    producer_name_address: str = Form(default="", max_length=1024),
+    country_of_origin: str = Form(default="", max_length=128),
+    government_warning: str = Form(default="", max_length=256),
+    contains_sulfites: str = Form(default="", max_length=256),
 ):
     """Verify user-confirmed field values without re-extracting from the image.
     Treats whatever is in the form as ground truth; only compliance is checked."""
@@ -142,14 +142,14 @@ async def verify_fields(
 async def verify(
     image: UploadFile = File(...),
     back_image: Optional[UploadFile] = File(default=None),
-    brand_name: str = Form(default=""),
-    class_type: str = Form(default=""),
-    alcohol_content: str = Form(default=""),
-    net_contents: str = Form(default=""),
-    producer_name_address: str = Form(default=""),
-    country_of_origin: str = Form(default=""),
-    government_warning: str = Form(default=""),
-    contains_sulfites: str = Form(default=""),
+    brand_name: str = Form(default="", max_length=512),
+    class_type: str = Form(default="", max_length=128),
+    alcohol_content: str = Form(default="", max_length=128),
+    net_contents: str = Form(default="", max_length=128),
+    producer_name_address: str = Form(default="", max_length=1024),
+    country_of_origin: str = Form(default="", max_length=128),
+    government_warning: str = Form(default="", max_length=256),
+    contains_sulfites: str = Form(default="", max_length=256),
 ):
     tmp = _save_upload(image, "tmp")
     tmp_back: Optional[Path] = None

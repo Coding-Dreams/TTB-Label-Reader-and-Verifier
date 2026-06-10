@@ -21,9 +21,30 @@ app = FastAPI(title="TTB Label Verification")
 # ---------------------------------------------------------------------------
 # Security headers — applied to every response
 # ---------------------------------------------------------------------------
+# CSP notes:
+#   - 'unsafe-inline' for script-src is required because all JS lives in
+#     inline <script> blocks. Tailwind CDN is the only external script source.
+#   - 'unsafe-inline' for style-src is required because Tailwind injects
+#     utility classes as inline <style> at runtime.
+#   - blob: in img-src covers URL.createObjectURL() used for image previews.
+#   - connect-src 'self' ensures fetch/XHR cannot reach arbitrary hosts even
+#     if an XSS payload were injected.
+_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; "
+    "style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; "
+    "img-src 'self' blob: data:; "
+    "connect-src 'self'; "
+    "font-src 'self'; "
+    "object-src 'none'; "
+    "base-uri 'self'; "
+    "frame-ancestors 'none'"
+)
+
 class _SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: StarletteRequest, call_next):
         response = await call_next(request)
+        response.headers["Content-Security-Policy"] = _CSP
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-XSS-Protection"] = "1; mode=block"
@@ -31,11 +52,34 @@ class _SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 # ---------------------------------------------------------------------------
-# Rate limiting — 20 requests per minute per IP on write endpoints
+# Body size pre-check — reject oversized requests before python-multipart
+# buffers the entire upload (Content-Length must be present; honest clients
+# always send it for multipart uploads). Two images at 20 MB each plus
+# multipart overhead → 50 MB ceiling.
+# ---------------------------------------------------------------------------
+_MAX_BODY_BYTES = 50 * 1024 * 1024  # 50 MB
+
+class _BodySizeLimitMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: StarletteRequest, call_next):
+        cl = request.headers.get("content-length")
+        if cl:
+            try:
+                if int(cl) > _MAX_BODY_BYTES:
+                    return Response(
+                        content='{"detail":"Request body too large — maximum 50 MB"}',
+                        status_code=413,
+                        media_type="application/json",
+                    )
+            except ValueError:
+                pass  # malformed header — let normal handling deal with it
+        return await call_next(request)
+
+# ---------------------------------------------------------------------------
+# Rate limiting — 200 requests per minute per IP on write endpoints
 # ---------------------------------------------------------------------------
 _RATE_LIMIT_PATHS = {"/extract", "/verify", "/verify-fields", "/batch/save-group"}
 _RATE_WINDOW = 60   # seconds
-_RATE_MAX = 20      # requests per window
+_RATE_MAX = 200     # requests per window
 
 class _RateLimitMiddleware(BaseHTTPMiddleware):
     def __init__(self, app):
@@ -59,8 +103,11 @@ class _RateLimitMiddleware(BaseHTTPMiddleware):
                 self._counts[ip].append(now)
         return await call_next(request)
 
+# Middleware is applied innermost-first: security headers wrap everything,
+# rate limiter is next, body size check is outermost (runs first on requests).
 app.add_middleware(_SecurityHeadersMiddleware)
 app.add_middleware(_RateLimitMiddleware)
+app.add_middleware(_BodySizeLimitMiddleware)
 
 logger = logging.getLogger(__name__)
 
