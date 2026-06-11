@@ -386,6 +386,21 @@
         return;
       }
 
+      // Pre-downscale all images upfront so the per-label extraction loop
+      // doesn't block on canvas resize + toBlob() between labels (the cause
+      // of the 3-6 s "freeze" between extractions visible in debug.log).
+      document.getElementById('progress-label').textContent = 'Preparing images…';
+      const scaledImages = new Map();
+      const filesToScale = [];
+      for (const g of allGroups) {
+        filesToScale.push(g.front.file);
+        if (g.isPair) filesToScale.push(g.back.file);
+      }
+      for (let i = 0; i < filesToScale.length; i++) {
+        scaledImages.set(filesToScale[i], await downscaleImage(filesToScale[i]));
+      }
+      document.getElementById('progress-label').textContent = 'Extracting…';
+
       updateProgress(0, total);
       const stopBtn = document.getElementById('stop-btn');
       stopBtn.textContent = 'Stop';
@@ -401,7 +416,7 @@
         const g = allGroups[i];
         const labelName = g.front.file.name + (g.isPair ? ' + ' + g.back.file.name : '');
         addLogEntry(`[${_utcTimestamp()}] ── Label ${i + 1}/${total}: ${labelName}`);
-        const result = await extractGroup(g);
+        const result = await extractGroup(g, scaledImages);
         result.batchId = batchId;
         extractionResults.push(result);
         appendResultCard(result, extractionResults.length - 1);
@@ -439,10 +454,10 @@
       });
     }
 
-    async function extractGroup(group) {
+    async function extractGroup(group, scaledImages) {
       const fd = new FormData();
-      fd.append('image', await downscaleImage(group.front.file));
-      if (group.isPair) fd.append('back_image', await downscaleImage(group.back.file));
+      fd.append('image', scaledImages?.get(group.front.file) ?? await downscaleImage(group.front.file));
+      if (group.isPair) fd.append('back_image', scaledImages?.get(group.back.file) ?? await downscaleImage(group.back.file));
       try {
         const res = await fetch('/extract', { method: 'POST', body: fd, headers: {'X-CSRF-Token': _csrfToken} });
         if (!res.ok) {
@@ -529,16 +544,22 @@
           if (f === 'government_warning') {
             const gw   = result.extracted.government_warning;
             const conf = result.extracted.government_warning_confidence ?? null;
+            const bold = result.extracted.government_warning_prefix_bold;
             if (gw) {
               const prefixBadge = gw.startsWith('GOVERNMENT WARNING')
                 ? `<span class="text-xs font-mono px-1.5 py-0.5 rounded bg-green-100 text-green-700">GOVERNMENT WARNING ✓</span>`
                 : `<span class="text-xs font-mono px-1.5 py-0.5 rounded bg-red-100 text-red-700">Prefix incorrect ✗</span>`;
               const col = conf == null ? 'bg-gray-100 text-gray-400'
-                        : conf >= 98  ? 'bg-green-100 text-green-700'
-                        : conf >= 95  ? 'bg-yellow-100 text-yellow-700'
+                        : conf >= 100  ? 'bg-green-100 text-green-700'
+                        : conf >= 99  ? 'bg-yellow-100 text-yellow-700'
                         : 'bg-red-100 text-red-700';
               const confBadge = `<span class="text-xs font-semibold px-1.5 py-0.5 rounded ${col}">${conf != null ? conf + '% body match' : 'Body text: N/A'}</span>`;
-              extra = `<div class="flex flex-wrap gap-1.5 mt-1">${prefixBadge}${confBadge}</div>`;
+              const boldCol = bold === true  ? 'bg-green-100 text-green-700'
+                            : bold === false ? 'bg-red-100 text-red-700'
+                            : 'bg-gray-100 text-gray-400';
+              const boldText = bold === true ? 'Prefix bold ✓' : bold === false ? 'Prefix bold ✗' : 'Bold: N/A';
+              const boldBadge = `<span class="text-xs font-semibold px-1.5 py-0.5 rounded ${boldCol}">${boldText}</span>`;
+              extra = `<div class="flex flex-wrap gap-1.5 mt-1">${prefixBadge}${confBadge}${boldBadge}</div>`;
             }
           }
           return `<div>
@@ -578,9 +599,14 @@
         <div class="border-t border-gray-100 pt-3">
           <div class="mb-1">${complianceLabel}</div>
           ${violations ? `<ul class="list-none mb-2">${violations}</ul>` : ''}
+          <label class="flex items-center gap-2 mt-2 cursor-pointer select-none">
+            <input type="checkbox" id="confirm-${idx}" onchange="toggleSubmitBtn(${idx})"
+              class="rounded border-gray-300 text-blue-600 focus:ring-blue-500" />
+            <span class="text-sm text-gray-600">I confirm this label's data is correct</span>
+          </label>
           <div class="flex items-center gap-3 mt-2">
-            <button onclick="submitSingle(${idx})" id="submit-btn-${idx}"
-              class="bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold py-1.5 px-4 rounded">
+            <button onclick="submitSingle(${idx})" id="submit-btn-${idx}" disabled
+              class="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-semibold py-1.5 px-4 rounded">
               Submit
             </button>
             <span id="submit-status-${idx}" class="text-xs text-gray-400"></span>
@@ -597,6 +623,14 @@
     }
 
     // ── Phase 4: Submit ────────────────────────────────────────────────────
+    function toggleSubmitBtn(idx) {
+      const cb  = document.getElementById(`confirm-${idx}`);
+      const btn = document.getElementById(`submit-btn-${idx}`);
+      const result = extractionResults[idx];
+      if (result && result.submitted) return;
+      btn.disabled = !cb.checked;
+    }
+
     async function submitSingle(idx) {
       const result = extractionResults[idx];
       if (result.submitted || result.error) return;
@@ -643,7 +677,10 @@
       const pending = extractionResults
         .map((r, i) => i)
         .filter(i => !extractionResults[i].submitted && !extractionResults[i].error);
+      // "Submit All" is an explicit bulk action — auto-confirm and enable each card
       for (const i of pending) {
+        const cb = document.getElementById(`confirm-${i}`);
+        if (cb && !cb.checked) { cb.checked = true; toggleSubmitBtn(i); }
         await submitSingle(i);
       }
       const anyFailed = extractionResults.some(r => !r.submitted && !r.error);

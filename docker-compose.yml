@@ -43,6 +43,8 @@ services:
       # raise on machines with ample RAM/cores. Lower if libleptonica segfaults
       # appear in dmesg under load.
       - OCR_PARALLELISM=6
+      # Set to 1 to enable detailed trace logging to data/debug.log
+      - DEBUG_LOG=${DEBUG_LOG:-0}
       # Password protecting the web UI. Leave APP_PASSWORD empty to disable auth
       # (useful for local development). Set SESSION_SECRET to a long random string
       # so sessions survive container restarts — generate one with:

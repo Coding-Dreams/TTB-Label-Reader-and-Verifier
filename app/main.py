@@ -21,6 +21,7 @@ from app.services.pdf_export import generate_filled_cola
 app = FastAPI(title="TTB Label Verification")
 
 logger = logging.getLogger(__name__)
+_dbg = logging.getLogger("debug.trace")
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -282,6 +283,50 @@ class _CsrfMiddleware:
             await self.app(scope, receive, send)
 
 
+# ---------------------------------------------------------------------------
+# Request tracing — outermost middleware, logs when the response is actually
+# sent back to the client so we can detect if the freeze is in the middleware
+# stack vs in the route handler.
+# ---------------------------------------------------------------------------
+class _RequestTraceMiddleware:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        path = scope.get("path", "?")
+        if path not in ("/extract", "/verify", "/verify-fields", "/batch/save-group"):
+            await self.app(scope, receive, send)
+            return
+        t0 = time.monotonic()
+        _dbg.debug("[ASGI] %s %s START", scope.get("method", "?"), path)
+        response_started = False
+
+        async def traced_send(message: dict) -> None:
+            nonlocal response_started
+            if message["type"] == "http.response.start":
+                status = message.get("status", "?")
+                _dbg.debug("[ASGI] %s %s response.start status=%s (%.1fs)",
+                            scope.get("method", "?"), path, status, time.monotonic() - t0)
+                response_started = True
+            elif message["type"] == "http.response.body":
+                body_len = len(message.get("body", b""))
+                _dbg.debug("[ASGI] %s %s response.body len=%d (%.1fs)",
+                            scope.get("method", "?"), path, body_len, time.monotonic() - t0)
+            await send(message)
+
+        try:
+            await self.app(scope, receive, traced_send)
+        except Exception as exc:
+            _dbg.debug("[ASGI] %s %s EXCEPTION: %s (%.1fs, response_started=%s)",
+                        scope.get("method", "?"), path, exc, time.monotonic() - t0, response_started)
+            raise
+        finally:
+            _dbg.debug("[ASGI] %s %s END (%.1fs)", scope.get("method", "?"), path, time.monotonic() - t0)
+
+
 # Middleware is applied innermost-first: security headers wrap everything,
 # rate limiter is next, body size check is next, CSRF is next, auth is outermost.
 app.add_middleware(_SecurityHeadersMiddleware)
@@ -289,6 +334,7 @@ app.add_middleware(_RateLimitMiddleware)
 app.add_middleware(_BodySizeLimitMiddleware)
 app.add_middleware(_CsrfMiddleware)
 app.add_middleware(_AuthMiddleware)
+app.add_middleware(_RequestTraceMiddleware)
 
 
 @app.on_event("startup")

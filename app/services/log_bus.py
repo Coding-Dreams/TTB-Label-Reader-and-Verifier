@@ -1,7 +1,9 @@
 import asyncio
+import logging
 from datetime import datetime, timezone
 
 _subscribers: list[asyncio.Queue] = []
+_dbg = logging.getLogger("debug.trace")
 
 
 async def emit(message: str) -> None:
@@ -9,11 +11,15 @@ async def emit(message: str) -> None:
         return
     ts = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
     entry = f"[{ts}] {message}"
+    full_count = 0
     for q in list(_subscribers):
         try:
             q.put_nowait(entry)
         except asyncio.QueueFull:
-            pass
+            full_count += 1
+    if full_count:
+        _dbg.debug("[log_bus] %d/%d subscriber queues FULL for: %s",
+                    full_count, len(_subscribers), message[:80])
 
 
 def subscribe() -> "asyncio.Queue[str]":

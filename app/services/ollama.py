@@ -36,15 +36,54 @@ def _safe_image_to_string(img, config: str = "") -> str:
     """All pytesseract.image_to_string calls go through here so the semaphore
     bounds total concurrent tesseract subprocesses regardless of caller."""
     import pytesseract
+    _dbg.debug("image_to_string WAIT sem (config=%r)", config)
+    t0 = time.monotonic()
     with _TESSERACT_SEM:
-        return pytesseract.image_to_string(img, config=config)
+        wait_ms = (time.monotonic() - t0) * 1000
+        _dbg.debug("image_to_string GOT sem (waited %.0fms, config=%r)", wait_ms, config)
+        try:
+            result = pytesseract.image_to_string(img, config=config)
+            _dbg.debug("image_to_string DONE (%.0fms total, config=%r)",
+                       (time.monotonic() - t0) * 1000, config)
+            return result
+        except Exception as exc:
+            _dbg.debug("image_to_string FAILED: %s", exc)
+            raise
 
 
 def _safe_image_to_osd(img) -> dict:
     """All pytesseract.image_to_osd calls go through here."""
     import pytesseract
+    _dbg.debug("image_to_osd WAIT sem")
+    t0 = time.monotonic()
     with _TESSERACT_SEM:
-        return pytesseract.image_to_osd(img, output_type=pytesseract.Output.DICT)
+        wait_ms = (time.monotonic() - t0) * 1000
+        _dbg.debug("image_to_osd GOT sem (waited %.0fms)", wait_ms)
+        try:
+            result = pytesseract.image_to_osd(img, output_type=pytesseract.Output.DICT)
+            _dbg.debug("image_to_osd DONE (%.0fms total)", (time.monotonic() - t0) * 1000)
+            return result
+        except Exception as exc:
+            _dbg.debug("image_to_osd FAILED: %s", exc)
+            raise
+
+
+def _safe_image_to_data(img, config: str = "") -> dict:
+    """All pytesseract.image_to_data calls go through here."""
+    import pytesseract
+    _dbg.debug("image_to_data WAIT sem (config=%r)", config)
+    t0 = time.monotonic()
+    with _TESSERACT_SEM:
+        wait_ms = (time.monotonic() - t0) * 1000
+        _dbg.debug("image_to_data GOT sem (waited %.0fms, config=%r)", wait_ms, config)
+        try:
+            result = pytesseract.image_to_data(img, config=config, output_type=pytesseract.Output.DICT)
+            _dbg.debug("image_to_data DONE (%.0fms total, config=%r)",
+                       (time.monotonic() - t0) * 1000, config)
+            return result
+        except Exception as exc:
+            _dbg.debug("image_to_data FAILED: %s", exc)
+            raise
 
 from app.models.label import LabelFields
 
@@ -56,6 +95,39 @@ _MAX_SIDE = 768      # cap large uploads before encoding
 _PRE_OSD_MAX = 2000  # pre-downscale before OSD — orientation detection doesn't need full resolution
 
 logger = logging.getLogger(__name__)
+
+# ── Debug file logger ──────────────────────────────────────────────────────
+# Set DEBUG_LOG=1 in docker-compose.yml / .env to enable trace logging to
+# data/debug.log. Disabled by default to avoid filesystem I/O overhead.
+_DEBUG_LOG_ENABLED = os.getenv("DEBUG_LOG", "").strip().lower() in ("1", "true", "yes")
+_dbg = logging.getLogger("debug.trace")
+_dbg.propagate = False
+if _DEBUG_LOG_ENABLED:
+    _dbg.setLevel(logging.DEBUG)
+    if not _dbg.handlers:
+        _fh = logging.FileHandler("data/debug.log", mode="a")
+        _fh.setFormatter(logging.Formatter(
+            "%(asctime)s.%(msecs)03d [%(threadName)s] %(message)s",
+            datefmt="%H:%M:%S",
+        ))
+        _dbg.addHandler(_fh)
+    _dbg.debug("=== ollama module loaded, OCR_PARALLELISM=%d ===", _OCR_PARALLELISM)
+else:
+    _dbg.setLevel(logging.CRITICAL + 1)  # effectively disabled — no handler, no output
+
+# Persistent HTTP client for Ollama — reused across all extractions to avoid
+# TCP connection setup/teardown overhead between consecutive batch labels.
+_client: Optional[httpx.AsyncClient] = None
+
+
+async def _get_client() -> httpx.AsyncClient:
+    global _client
+    if _client is None or _client.is_closed:
+        _dbg.debug("Creating NEW httpx.AsyncClient (old was %s)",
+                    "closed" if _client and _client.is_closed else "None")
+        _client = httpx.AsyncClient(timeout=TIMEOUT)
+    return _client
+
 
 _FULL_PROMPT = """You are an OCR assistant specialized in reading alcohol beverage labels.
 Return ONLY valid JSON with no additional text. Set any field to null if not visible.
@@ -145,6 +217,9 @@ def _encode_image(
     enhance: bool = False,
     back_panel: bool = False,
 ) -> str:
+    _dbg.debug("_encode_image START path=%s max_side=%d enhance=%s back=%s",
+               image_path.name if image_path else "?", max_side, enhance, back_panel)
+    t0 = time.monotonic()
     with Image.open(image_path) as img:
         if img.mode in ("RGBA", "LA", "P"):
             img = img.convert("RGB")
@@ -165,6 +240,8 @@ def _encode_image(
             img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=90)
+        _dbg.debug("_encode_image DONE path=%s (%.0fms)",
+                    image_path.name if image_path else "?", (time.monotonic() - t0) * 1000)
         return base64.b64encode(buf.getvalue()).decode()
 
 
@@ -192,17 +269,17 @@ def _stitch_images(front_path: Path, back_path: Path) -> Path:
 
 async def _warmup_model() -> None:
     try:
-        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-            await client.post(
-                f"{OLLAMA_BASE_URL}/api/chat",
-                json={
-                    "model": MODEL,
-                    "messages": [{"role": "user", "content": "hi"}],
-                    "stream": False,
-                    "keep_alive": -1,
-                    "options": {"temperature": 0.1},
-                },
-            )
+        client = await _get_client()
+        await client.post(
+            f"{OLLAMA_BASE_URL}/api/chat",
+            json={
+                "model": MODEL,
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": False,
+                "keep_alive": -1,
+                "options": {"temperature": 0.1},
+            },
+        )
         logger.info("Model warmed up and loaded into VRAM")
     except Exception as e:
         logger.warning(f"Model warmup failed (will load on first request): {e}")
@@ -212,17 +289,27 @@ async def extract_label_fields(
     image_path: Path,
     back_image_path: Optional[Path] = None,
     debug_info: Optional[dict] = None,
+    metadata: Optional[dict] = None,
 ) -> LabelFields:
+    _extract_t0 = time.monotonic()
+    _rid = f"R{id(image_path) % 10000:04d}"  # short request ID for correlating log lines
+    _dbg.debug("[%s] ========== extract_label_fields START ==========", _rid)
+    _dbg.debug("[%s] front=%s back=%s", _rid,
+               image_path.name, back_image_path.name if back_image_path else "None")
     stitched: Optional[Path] = None
     loop = asyncio.get_running_loop()
     # Kick off OCR scans immediately — they only need the raw image paths and run in
     # a thread pool, so they overlap with image stitching, the main VLM call, and
     # every secondary VLM pass. Awaited just before the final return.
+    _dbg.debug("[%s] Submitting pre-started futures", _rid)
     gw_ocr_future = loop.run_in_executor(
         None, _detect_government_warning_ocr, image_path, back_image_path
     )
     sulfite_present_future = loop.run_in_executor(
         None, _label_mentions_sulfite_ocr, image_path, back_image_path
+    )
+    gw_bold_future = loop.run_in_executor(
+        None, _detect_gw_prefix_bold, image_path, back_image_path
     )
     # Kick off secondary-pass image encodings now — they only need the original paths
     # and will complete during the main VLM call (~10–30 s), making them effectively free.
@@ -232,179 +319,221 @@ async def extract_label_fields(
         if back_image_path and back_image_path.exists()
         else None
     )
+    back_b64_future = (
+        loop.run_in_executor(None, _encode_image, back_image_path, _MAX_SIDE, False, True)
+        if back_image_path and back_image_path.exists()
+        else None
+    )
+    _dbg.debug("[%s] All futures submitted (back_b64=%s, sulfite_b64=%s)",
+               _rid, back_b64_future is not None, sulfite_b64_future is not None)
     try:
         await log_bus.emit("Files received — starting extraction")
-        back_b64: Optional[str] = None
         if back_image_path and back_image_path.exists():
             await log_bus.emit("Stitching front + back panels")
             stitched = await loop.run_in_executor(
                 None, _stitch_images, image_path, back_image_path
             )
             effective_path = stitched
-            # Encode back panel separately at full resolution for targeted second-pass lookups
-            back_b64 = await loop.run_in_executor(
-                None, _encode_image, back_image_path, _MAX_SIDE, False, True
-            )
         else:
             effective_path = image_path
 
-        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-            image_b64 = await loop.run_in_executor(None, _encode_image, effective_path)
-            await log_bus.emit("Sending label to AI model (primary pass)…")
-            _t0 = time.monotonic()
-            raw = await _call_ollama(client, image_b64, _FULL_PROMPT)
-            await log_bus.emit(f"AI model responded ({time.monotonic() - _t0:.1f}s) — parsing fields")
+        client = await _get_client()
+        _dbg.debug("[%s] Encoding stitched/effective image", _rid)
+        image_b64 = await loop.run_in_executor(None, _encode_image, effective_path)
+        _dbg.debug("[%s] Primary VLM call START", _rid)
+        await log_bus.emit("Sending label to AI model (primary pass)…")
+        _t0 = time.monotonic()
+        raw = await _call_ollama(client, image_b64, _FULL_PROMPT)
+        _dbg.debug("[%s] Primary VLM call DONE (%.1fs)", _rid, time.monotonic() - _t0)
+        await log_bus.emit(f"AI model responded ({time.monotonic() - _t0:.1f}s) — parsing fields")
 
-            parsed = _parse_json(raw)
+        parsed = _parse_json(raw)
+        if debug_info is not None:
+            debug_info["main_raw_json"] = raw
+            debug_info["after_parse"] = dict(parsed)
+
+        data = _postprocess(parsed)
+        if debug_info is not None:
+            debug_info["after_postprocess"] = dict(data)
+            debug_info["secondary"] = {}
+
+        # Await the pre-started back-panel encoding (1024 px, contrast-enhanced);
+        # falls back to the stitched/front image when there is no back panel.
+        _dbg.debug("[%s] await sulfite_b64_future (is_none=%s)", _rid, sulfite_b64_future is None)
+        sulfite_b64 = await sulfite_b64_future if sulfite_b64_future is not None else image_b64
+        _dbg.debug("[%s] sulfite_b64_future resolved", _rid)
+        if not data.get("contains_sulfites"):
+            await log_bus.emit("Secondary pass: checking for sulfite declaration")
+            sink: Optional[dict] = {} if debug_info is not None else None
+            result = await _extract_sulfites(client, sulfite_b64, _debug_sink=sink)
             if debug_info is not None:
-                debug_info["main_raw_json"] = raw
-                debug_info["after_parse"] = dict(parsed)
+                debug_info["secondary"]["sulfites"] = {"raw": sink.get("raw"), "accepted": result}
+            data["contains_sulfites"] = result
+            await log_bus.emit(f"  → sulfites: {result!r}")
 
-            data = _postprocess(parsed)
-            if debug_info is not None:
-                debug_info["after_postprocess"] = dict(data)
-                debug_info["secondary"] = {}
-
-            # Await the pre-started back-panel encoding (1024 px, contrast-enhanced);
-            # falls back to the stitched/front image when there is no back panel.
-            sulfite_b64 = await sulfite_b64_future if sulfite_b64_future is not None else image_b64
-            if not data.get("contains_sulfites"):
-                await log_bus.emit("Secondary pass: checking for sulfite declaration")
-                sink: Optional[dict] = {} if debug_info is not None else None
-                result = await _extract_sulfites(client, sulfite_b64, _debug_sink=sink)
-                if debug_info is not None:
-                    debug_info["secondary"]["sulfites"] = {"raw": sink.get("raw"), "accepted": result}
-                data["contains_sulfites"] = result
-                await log_bus.emit(f"  → sulfites: {result!r}")
-
-            if not data.get("brand_name"):
-                await log_bus.emit("Secondary pass: extracting brand name")
-                sink = {} if debug_info is not None else None
-                result = await _extract_brand_name(client, image_b64, _debug_sink=sink)
-                if debug_info is not None:
-                    debug_info["secondary"]["brand_name"] = {"raw": sink.get("raw"), "accepted": result}
-                data["brand_name"] = result
-                await log_bus.emit(f"  → brand name: {result!r}")
-
-            # Always re-extract class_type from the front panel using the dedicated prompt.
-            # The full prompt runs on the stitched image where each panel is half-width; the
-            # dedicated function on the front panel alone is more reliable and applies equally
-            # to every label regardless of what the full prompt returned.
-            await log_bus.emit("Secondary pass: classifying beverage type (Wine / Malt Beverage / Distilled Spirits)")
-            front_b64 = await front_b64_future
+        if not data.get("brand_name"):
+            await log_bus.emit("Secondary pass: extracting brand name")
             sink = {} if debug_info is not None else None
-            class_from_front = await _extract_class_type(client, front_b64, _debug_sink=sink)
+            result = await _extract_brand_name(client, image_b64, _debug_sink=sink)
             if debug_info is not None:
-                debug_info["secondary"]["class_type"] = {"raw": sink.get("raw"), "accepted": class_from_front}
-            if class_from_front:
-                data["class_type"] = class_from_front
-            await log_bus.emit(f"  → class type: {data.get('class_type')!r}")
+                debug_info["secondary"]["brand_name"] = {"raw": sink.get("raw"), "accepted": result}
+            data["brand_name"] = result
+            await log_bus.emit(f"  → brand name: {result!r}")
 
-            # If net_contents not found in main pass, try a targeted second-pass lookup
-            if not data.get("net_contents"):
-                await log_bus.emit("Secondary pass: locating net contents / container volume")
-                net_b64 = back_b64 or image_b64
-                sink = {} if debug_info is not None else None
-                result = await _extract_net_contents(client, net_b64, _debug_sink=sink)
-                if debug_info is not None:
-                    debug_info["secondary"]["net_contents"] = {"raw": sink.get("raw"), "accepted": result}
-                data["net_contents"] = result
-                await log_bus.emit(f"  → net contents: {result!r}")
+        # Always re-extract class_type from the front panel using the dedicated prompt.
+        # The full prompt runs on the stitched image where each panel is half-width; the
+        # dedicated function on the front panel alone is more reliable and applies equally
+        # to every label regardless of what the full prompt returned.
+        await log_bus.emit("Secondary pass: classifying beverage type (Wine / Malt Beverage / Distilled Spirits)")
+        _dbg.debug("[%s] await front_b64_future", _rid)
+        front_b64 = await front_b64_future
+        _dbg.debug("[%s] front_b64_future resolved", _rid)
+        sink = {} if debug_info is not None else None
+        class_from_front = await _extract_class_type(client, front_b64, _debug_sink=sink)
+        if debug_info is not None:
+            debug_info["secondary"]["class_type"] = {"raw": sink.get("raw"), "accepted": class_from_front}
+        if class_from_front:
+            data["class_type"] = class_from_front
+        await log_bus.emit(f"  → class type: {data.get('class_type')!r}")
 
-            # If producer/bottler still missing, look for it specifically on the back panel
-            if not data.get("producer_name_address"):
-                await log_bus.emit("Secondary pass: finding producer / bottler")
-                # Use the high-resolution + contrast-enhanced back panel encoding so
-                # small-print producer/bottler text (e.g. COLA17/18 'DC FLYNT MW SELECTIONS')
-                # remains legible to the VLM. Falls back to stitched image when no back exists.
-                prod_b64 = sulfite_b64 if back_image_path and back_image_path.exists() else image_b64
-                sink = {} if debug_info is not None else None
-                result = await _extract_producer(client, prod_b64, _debug_sink=sink)
-                if debug_info is not None:
-                    debug_info["secondary"]["producer_name_address"] = {"raw": sink.get("raw"), "accepted": result}
-                if result:
-                    result = _IMPORTER_PREFIX_RE.sub('', result).strip()
-                    result = _URL_SUFFIX_RE.sub('', result).strip()
-                    data["producer_name_address"] = result or None
-                await log_bus.emit(f"  → producer: {data.get('producer_name_address')!r}")
+        # Always await to prevent the future from leaking a default-executor
+        # thread (and its _TESSERACT_SEM slot inside _auto_orient) into the
+        # next extraction cycle — same pattern as the gw_bold_future fix.
+        _dbg.debug("[%s] await back_b64_future (is_none=%s)", _rid, back_b64_future is None)
+        back_b64 = await back_b64_future if back_b64_future is not None else None
+        _dbg.debug("[%s] back_b64_future resolved", _rid)
 
-            # If producer is a non-US address, the US importer was missed in the main pass —
-            # run a dedicated importer lookup on the full stitched image
-            if data.get("producer_name_address") and not _is_us_address(data["producer_name_address"]):
-                await log_bus.emit("Secondary pass: finding US importer (foreign producer detected)")
-                sink = {} if debug_info is not None else None
-                importer = await _extract_importer(client, image_b64)
-                if debug_info is not None:
-                    debug_info["secondary"]["us_importer"] = {"raw": importer, "accepted": importer}
-                if importer:
-                    cleaned = _IMPORTER_PREFIX_RE.sub('', importer).strip()
-                    cleaned = _URL_SUFFIX_RE.sub('', cleaned).strip()
-                    data["producer_name_address"] = cleaned or importer
-                await log_bus.emit(f"  → US importer: {importer!r}")
-
-            # OCR-based government_warning gate: OCR is the authoritative presence detector.
-            # - OCR absent  → override VLM with None (prevents hallucination)
-            # - OCR present + VLM has full text → keep VLM's full text for comparison
-            # - OCR present + VLM missed it     → fall back to sentinel so comparator
-            #   knows the warning exists even without the body text
-            await log_bus.emit("OCR verification: scanning for GOVERNMENT WARNING text")
-            gw_ocr = await gw_ocr_future
-            if gw_ocr is None:
-                # OCR found no prefix — override VLM to prevent hallucination
-                data["government_warning"] = None
-            else:
-                gw_vlm = data.get("government_warning") or ""
-                if not gw_vlm:
-                    # OCR confirmed presence but VLM returned nothing — use sentinel
-                    data["government_warning"] = "GOVERNMENT WARNING"
-                elif not gw_vlm.startswith("GOVERNMENT WARNING"):
-                    # OCR confirmed the all-caps prefix is on the label; VLM either
-                    # dropped it or returned a mixed-case variant. Strip any mangled
-                    # prefix and prepend the canonical form.
-                    body = _GW_MANGLED_PREFIX_RE.sub("", gw_vlm).strip()
-                    data["government_warning"] = ("GOVERNMENT WARNING: " + body) if body else "GOVERNMENT WARNING"
-                # else: VLM got the prefix right — keep as-is
-            gw_final = data.get("government_warning")
-            await log_bus.emit(f"  → government warning: {gw_final!r}")
+        # If net_contents not found in main pass, try a targeted second-pass lookup
+        if not data.get("net_contents"):
+            await log_bus.emit("Secondary pass: locating net contents / container volume")
+            net_b64 = back_b64 or image_b64
+            sink = {} if debug_info is not None else None
+            result = await _extract_net_contents(client, net_b64, _debug_sink=sink)
             if debug_info is not None:
-                debug_info["secondary"]["government_warning"] = {"raw": gw_ocr, "accepted": gw_final}
+                debug_info["secondary"]["net_contents"] = {"raw": sink.get("raw"), "accepted": result}
+            data["net_contents"] = result
+            await log_bus.emit(f"  → net contents: {result!r}")
 
-            # OCR-based sulfite gate — only applied to NON-WINE class types.
-            # Per 27 CFR 4.32a, wines essentially always carry a sulfite declaration
-            # (positive or negative). The VLM is reliable here and OCR on small or
-            # low-resolution wine labels often fails to find the declaration even
-            # when it's clearly present (e.g. COLA1 'Contains Sulfities' OCR misread,
-            # COLA12 labels too small for OCR). Trusting the VLM on wines avoids
-            # those false negatives.
-            #
-            # For non-wines (spirits, malt beverages, RTD cocktails), a sulfite
-            # declaration is rare — when the VLM reports one it's typically a
-            # 'CONTAINS ALCOHOL' / 'CONTAINS SULFITES' confusion (COLA17/18 KIRKLAND
-            # lime drop). OCR validation is appropriate there.
-            sulfite_present = await sulfite_present_future
-            class_type_lower = (data.get("class_type") or "").strip().lower()
-            if (
-                data.get("contains_sulfites")
-                and class_type_lower != "wine"
-                and not sulfite_present
-            ):
-                if debug_info is not None:
-                    debug_info["secondary"]["contains_sulfites_ocr_gate"] = {
-                        "vlm_value": data["contains_sulfites"],
-                        "ocr_found_mention": False,
-                        "class_type": class_type_lower,
-                        "result": None,
-                    }
-                data["contains_sulfites"] = None
+        # If producer/bottler still missing, look for it specifically on the back panel
+        if not data.get("producer_name_address"):
+            await log_bus.emit("Secondary pass: finding producer / bottler")
+            # Use the high-resolution + contrast-enhanced back panel encoding so
+            # small-print producer/bottler text (e.g. COLA17/18 'DC FLYNT MW SELECTIONS')
+            # remains legible to the VLM. Falls back to stitched image when no back exists.
+            prod_b64 = sulfite_b64 if back_image_path and back_image_path.exists() else image_b64
+            sink = {} if debug_info is not None else None
+            result = await _extract_producer(client, prod_b64, _debug_sink=sink)
+            if debug_info is not None:
+                debug_info["secondary"]["producer_name_address"] = {"raw": sink.get("raw"), "accepted": result}
+            if result:
+                result = _IMPORTER_PREFIX_RE.sub('', result).strip()
+                result = _URL_SUFFIX_RE.sub('', result).strip()
+                data["producer_name_address"] = result or None
+            await log_bus.emit(f"  → producer: {data.get('producer_name_address')!r}")
 
-        # async with httpx.AsyncClient exits here — connections close before we
-        # emit "Extraction complete", so the HTTP response goes out immediately
-        # after the log message with no additional teardown delay.
+        # If producer is a non-US address, the US importer was missed in the main pass —
+        # run a dedicated importer lookup on the full stitched image
+        if data.get("producer_name_address") and not _is_us_address(data["producer_name_address"]):
+            await log_bus.emit("Secondary pass: finding US importer (foreign producer detected)")
+            sink = {} if debug_info is not None else None
+            importer = await _extract_importer(client, image_b64)
+            if debug_info is not None:
+                debug_info["secondary"]["us_importer"] = {"raw": importer, "accepted": importer}
+            if importer:
+                cleaned = _IMPORTER_PREFIX_RE.sub('', importer).strip()
+                cleaned = _URL_SUFFIX_RE.sub('', cleaned).strip()
+                data["producer_name_address"] = cleaned or importer
+            await log_bus.emit(f"  → US importer: {importer!r}")
+
+        # OCR-based government_warning gate: OCR is the authoritative presence detector.
+        # - OCR absent  → override VLM with None (prevents hallucination)
+        # - OCR present + VLM has full text → keep VLM's full text for comparison
+        # - OCR present + VLM missed it     → fall back to sentinel so comparator
+        #   knows the warning exists even without the body text
+        await log_bus.emit("OCR verification: scanning for GOVERNMENT WARNING text")
+        _dbg.debug("[%s] await gw_ocr_future", _rid)
+        gw_ocr = await gw_ocr_future
+        _dbg.debug("[%s] gw_ocr_future resolved → %r", _rid, gw_ocr)
+        if gw_ocr is None:
+            # OCR found no prefix — override VLM to prevent hallucination
+            data["government_warning"] = None
+        else:
+            gw_vlm = data.get("government_warning") or ""
+            if not gw_vlm:
+                # OCR confirmed presence but VLM returned nothing — use sentinel
+                data["government_warning"] = "GOVERNMENT WARNING"
+            elif not gw_vlm.startswith("GOVERNMENT WARNING"):
+                # OCR confirmed the all-caps prefix is on the label; VLM either
+                # dropped it or returned a mixed-case variant. Strip any mangled
+                # prefix and prepend the canonical form.
+                body = _GW_MANGLED_PREFIX_RE.sub("", gw_vlm).strip()
+                data["government_warning"] = ("GOVERNMENT WARNING: " + body) if body else "GOVERNMENT WARNING"
+            # else: VLM got the prefix right — keep as-is
+        gw_final = data.get("government_warning")
+        await log_bus.emit(f"  → government warning: {gw_final!r}")
+        if debug_info is not None:
+            debug_info["secondary"]["government_warning"] = {"raw": gw_ocr, "accepted": gw_final}
+
+        # Always await to prevent the future from leaking a _TESSERACT_SEM slot
+        # into the next extraction cycle (the root cause of inter-label stalls
+        # when gw_ocr is None and the future was never awaited).
+        _dbg.debug("[%s] await gw_bold_future", _rid)
+        gw_bold = await gw_bold_future
+        _dbg.debug("[%s] gw_bold_future resolved → %r", _rid, gw_bold)
+        if gw_ocr is None:
+            gw_bold = None  # result is meaningless without a confirmed warning
+        if gw_bold is not None:
+            await log_bus.emit(f"  → prefix bold: {gw_bold}")
+        if metadata is not None:
+            metadata["government_warning_prefix_bold"] = gw_bold
+
+        # OCR-based sulfite gate — only applied to NON-WINE class types.
+        # Per 27 CFR 4.32a, wines essentially always carry a sulfite declaration
+        # (positive or negative). The VLM is reliable here and OCR on small or
+        # low-resolution wine labels often fails to find the declaration even
+        # when it's clearly present (e.g. COLA1 'Contains Sulfities' OCR misread,
+        # COLA12 labels too small for OCR). Trusting the VLM on wines avoids
+        # those false negatives.
+        #
+        # For non-wines (spirits, malt beverages, RTD cocktails), a sulfite
+        # declaration is rare — when the VLM reports one it's typically a
+        # 'CONTAINS ALCOHOL' / 'CONTAINS SULFITES' confusion (COLA17/18 KIRKLAND
+        # lime drop). OCR validation is appropriate there.
+        _dbg.debug("[%s] await sulfite_present_future", _rid)
+        sulfite_present = await sulfite_present_future
+        _dbg.debug("[%s] sulfite_present_future resolved → %r", _rid, sulfite_present)
+        class_type_lower = (data.get("class_type") or "").strip().lower()
+        if (
+            data.get("contains_sulfites")
+            and class_type_lower != "wine"
+            and not sulfite_present
+        ):
+            if debug_info is not None:
+                debug_info["secondary"]["contains_sulfites_ocr_gate"] = {
+                    "vlm_value": data["contains_sulfites"],
+                    "ocr_found_mention": False,
+                    "class_type": class_type_lower,
+                    "result": None,
+                }
+            data["contains_sulfites"] = None
+
+        _dbg.debug("[%s] All futures resolved, building LabelFields (%.1fs total)",
+                    _rid, time.monotonic() - _extract_t0)
         await log_bus.emit("Extraction complete")
-        return LabelFields(**data)
+        _dbg.debug("[%s] 'Extraction complete' emitted, returning LabelFields now", _rid)
+        result = LabelFields(**data)
+        _dbg.debug("[%s] LabelFields built successfully, returning", _rid)
+        return result
+    except Exception as exc:
+        _dbg.debug("[%s] EXCEPTION in extract_label_fields: %s: %s",
+                    _rid, type(exc).__name__, exc)
+        raise
     finally:
+        _dbg.debug("[%s] finally block — cleaning up (stitched=%s)", _rid, stitched is not None)
         if stitched:
             stitched.unlink(missing_ok=True)
+        _dbg.debug("[%s] ========== extract_label_fields END (%.1fs) ==========",
+                    _rid, time.monotonic() - _extract_t0)
 
 
 async def _extract_brand_name(
@@ -610,11 +739,17 @@ async def _post_with_retry(
     last_exc: Optional[Exception] = None
     for attempt in range(attempts):
         try:
+            _dbg.debug("_post_with_retry attempt %d/%d", attempt + 1, attempts)
+            t0 = time.monotonic()
             resp = await client.post(f"{OLLAMA_BASE_URL}/api/chat", json=json_body)
+            _dbg.debug("_post_with_retry got response status=%d (%.1fs)",
+                        resp.status_code, time.monotonic() - t0)
             resp.raise_for_status()
             return resp
         except _TRANSIENT_HTTPX as exc:
             last_exc = exc
+            _dbg.debug("_post_with_retry TRANSIENT error attempt %d: %s: %s",
+                        attempt + 1, type(exc).__name__, exc)
             if attempt == attempts - 1:
                 raise
             logger.warning(
@@ -811,9 +946,14 @@ def _ocr_text_mentions_sulfite(text: str) -> bool:
     return False
 
 
-def _ocr_finds_warning(img, config: str = "") -> bool:
+def _ocr_finds_warning(img, config: str = "", _cancel: Optional[threading.Event] = None) -> bool:
     """Single OCR call — True if exact uppercase 'GOVERNMENT WARNING' appears in result."""
-    return bool(_GOVT_WARNING_RE.search(_safe_image_to_string(img, config=config)))
+    if _cancel is not None and _cancel.is_set():
+        _dbg.debug("_ocr_finds_warning SKIPPED (cancelled)")
+        return False  # another worker already found it — skip the expensive OCR
+    result = bool(_GOVT_WARNING_RE.search(_safe_image_to_string(img, config=config)))
+    _dbg.debug("_ocr_finds_warning config=%r → %s", config, result)
+    return result
 
 
 def _label_mentions_sulfite_ocr(image_path: Path, back_image_path: Optional[Path]) -> bool:
@@ -825,6 +965,8 @@ def _label_mentions_sulfite_ocr(image_path: Path, back_image_path: Optional[Path
     sulfites at all (e.g. COLA17/18 KIRKLAND lime drop, where 'CONTAINS ALCOHOL' tricks
     the VLM into outputting 'CONTAINS SULFITES').
     """
+    _dbg.debug("_label_mentions_sulfite_ocr START")
+    t0 = time.monotonic()
     try:
         for path in filter(None, [image_path, back_image_path]):
             if not path.exists():
@@ -832,9 +974,12 @@ def _label_mentions_sulfite_ocr(image_path: Path, back_image_path: Optional[Path
             img = ImageOps.exif_transpose(Image.open(path)).convert("L")
             for variant in (img, img.resize((img.width * 2, img.height * 2), Image.LANCZOS)):
                 if _ocr_text_mentions_sulfite(_safe_image_to_string(variant)):
+                    _dbg.debug("_label_mentions_sulfite_ocr FOUND (%.0fms)", (time.monotonic() - t0) * 1000)
                     return True
+        _dbg.debug("_label_mentions_sulfite_ocr NOT FOUND (%.0fms)", (time.monotonic() - t0) * 1000)
         return False
-    except Exception:
+    except Exception as exc:
+        _dbg.debug("_label_mentions_sulfite_ocr EXCEPTION: %s (%.0fms)", exc, (time.monotonic() - t0) * 1000)
         return True  # OCR unavailable — don't override the VLM result
 
 
@@ -844,11 +989,17 @@ def _any_match_parallel(tasks: list) -> bool:
     Each future's exception is handled independently — one crashed tesseract subprocess
     must not poison the result of the other strategies. Otherwise a transient subprocess
     failure under load makes the whole detection silently return None.
+
+    A threading.Event cancellation flag is shared with all workers so that once a match
+    is found, workers that haven't yet acquired _TESSERACT_SEM skip the expensive OCR
+    call instead of queuing up and holding semaphore slots into the next extraction.
     """
-    futures = [_OCR_POOL.submit(_ocr_finds_warning, img, cfg) for img, cfg in tasks]
+    cancel = threading.Event()
+    futures = [_OCR_POOL.submit(_ocr_finds_warning, img, cfg, cancel) for img, cfg in tasks]
     for f in as_completed(futures):
         try:
             if f.result():
+                cancel.set()
                 for pending in futures:
                     if pending is not f and not pending.done():
                         pending.cancel()
@@ -865,6 +1016,8 @@ def _detect_government_warning_ocr(image_path: Path, back_image_path: Optional[P
     the next tier only if no strategy in the current one found the phrase. Most labels
     resolve in tier 1 in well under a second.
     """
+    _dbg.debug("_detect_gw_ocr START")
+    _gw_t0 = time.monotonic()
     try:
         import pytesseract  # noqa: F401  (fail fast if missing)
         prepared = []
@@ -893,7 +1046,9 @@ def _detect_government_warning_ocr(image_path: Path, back_image_path: Optional[P
                 (p["ac_up2"], ""),
                 (p["ac_up2"], "--psm 6"),
             ])
+        _dbg.debug("_detect_gw_ocr tier1 (%d tasks)", len(tier1))
         if _any_match_parallel(tier1):
+            _dbg.debug("_detect_gw_ocr FOUND in tier1 (%.0fms)", (time.monotonic() - _gw_t0) * 1000)
             return "GOVERNMENT WARNING"
 
         # Tier 2: rotated whole image (180° upside-down, 90°/270° landscape labels)
@@ -902,7 +1057,9 @@ def _detect_government_warning_ocr(image_path: Path, back_image_path: Optional[P
             for angle in (180, 270, 90):
                 rot = p["gray"].rotate(angle, expand=True)
                 tier2.append((rot.resize((rot.width * 2, rot.height * 2), Image.LANCZOS), ""))
+        _dbg.debug("_detect_gw_ocr tier2 (%d tasks)", len(tier2))
         if _any_match_parallel(tier2):
+            _dbg.debug("_detect_gw_ocr FOUND in tier2 (%.0fms)", (time.monotonic() - _gw_t0) * 1000)
             return "GOVERNMENT WARNING"
 
         # Tier 3: single-colour channels — handles green-on-green, red-on-red labels
@@ -913,7 +1070,9 @@ def _detect_government_warning_ocr(image_path: Path, back_image_path: Optional[P
                 tier3.append((ch_up, "--psm 6"))
                 rot = ch.rotate(180, expand=True)
                 tier3.append((rot.resize((rot.width * 2, rot.height * 2), Image.LANCZOS), "--psm 6"))
+        _dbg.debug("_detect_gw_ocr tier3 (%d tasks)", len(tier3))
         if _any_match_parallel(tier3):
+            _dbg.debug("_detect_gw_ocr FOUND in tier3 (%.0fms)", (time.monotonic() - _gw_t0) * 1000)
             return "GOVERNMENT WARNING"
 
         # Tier 4: right-edge crop + perpendicular rotation (TOMMYROTTER-style sideways text)
@@ -927,11 +1086,106 @@ def _detect_government_warning_ocr(image_path: Path, back_image_path: Optional[P
                     rot = ch.rotate(-90, expand=True)
                     scaled = rot.resize((rot.width * 4, rot.height * 4), Image.LANCZOS)
                     tier4.append((scaled, "--psm 6"))
+        _dbg.debug("_detect_gw_ocr tier4 (%d tasks)", len(tier4))
         if _any_match_parallel(tier4):
+            _dbg.debug("_detect_gw_ocr FOUND in tier4 (%.0fms)", (time.monotonic() - _gw_t0) * 1000)
             return "GOVERNMENT WARNING"
 
+        _dbg.debug("_detect_gw_ocr NOT FOUND after all tiers (%.0fms)", (time.monotonic() - _gw_t0) * 1000)
         return None
-    except Exception:
+    except Exception as exc:
+        _dbg.debug("_detect_gw_ocr EXCEPTION: %s: %s (%.0fms)",
+                    type(exc).__name__, exc, (time.monotonic() - _gw_t0) * 1000)
+        return None
+
+
+def _avg_word_density(img, ocr_data: dict, indices: list) -> Optional[float]:
+    """Average dark-pixel density across word bounding boxes."""
+    densities = []
+    for i in indices:
+        x, y = int(ocr_data['left'][i]), int(ocr_data['top'][i])
+        w, h = int(ocr_data['width'][i]), int(ocr_data['height'][i])
+        if w < 4 or h < 4:
+            continue
+        region = img.crop((x, y, x + w, y + h))
+        pixels = list(region.getdata())
+        if not pixels:
+            continue
+        dark = sum(1 for p in pixels if p < 128)
+        densities.append(dark / len(pixels))
+    return sum(densities) / len(densities) if densities else None
+
+
+def _check_bold_on_variant(img) -> Optional[bool]:
+    """Analyse a single image variant for GW prefix boldness via pixel density."""
+    data = _safe_image_to_data(img)
+    n = len(data['text'])
+
+    # Locate "GOVERNMENT WARNING" in the OCR word stream
+    gw_start = None
+    for i in range(n - 1):
+        t1 = data['text'][i].strip().upper()
+        t2 = data['text'][i + 1].strip().upper().rstrip(':')
+        if t1 == 'GOVERNMENT' and t2 == 'WARNING':
+            gw_start = i
+            break
+
+    if gw_start is None:
+        return None
+
+    prefix_indices = [gw_start, gw_start + 1]
+
+    # Collect body text words following the prefix — alphabetic, 2+ chars,
+    # reasonable OCR confidence. Skip numbers and punctuation fragments.
+    body_indices = []
+    for i in range(gw_start + 2, min(gw_start + 30, n)):
+        word = data['text'][i].strip()
+        conf = int(data['conf'][i]) if str(data['conf'][i]) != '-1' else 0
+        if conf > 20 and len(word) >= 2 and word.isalpha():
+            body_indices.append(i)
+            if len(body_indices) >= 6:
+                break
+
+    if len(body_indices) < 3:
+        return None  # not enough body text to compare
+
+    prefix_density = _avg_word_density(img, data, prefix_indices)
+    body_density = _avg_word_density(img, data, body_indices)
+
+    if prefix_density is None or body_density is None or body_density < 0.01:
+        return None
+
+    # Updated, too many N/As, making more sensitive
+    ratio = prefix_density / body_density
+    if ratio >= 1.01:
+        return True
+    elif ratio <= 1.01:
+        return False
+    return None  # ambiguous — difference too small to call
+
+
+def _detect_gw_prefix_bold(image_path: Path, back_image_path: Optional[Path]) -> Optional[bool]:
+    """Detect whether the GOVERNMENT WARNING prefix appears bold relative to body text."""
+    _dbg.debug("_detect_gw_prefix_bold START")
+    t0 = time.monotonic()
+    try:
+        import pytesseract  # noqa: F401
+        # Back panel first — government warning is typically on the back
+        for path in filter(None, [back_image_path, image_path]):
+            if not path or not path.exists():
+                continue
+            img = ImageOps.exif_transpose(Image.open(path)).convert("L")
+            # Upscale 2x for better bounding-box accuracy
+            img = img.resize((img.width * 2, img.height * 2), Image.LANCZOS)
+            img = ImageOps.autocontrast(img, cutoff=2)
+            result = _check_bold_on_variant(img)
+            if result is not None:
+                _dbg.debug("_detect_gw_prefix_bold → %s (%.0fms)", result, (time.monotonic() - t0) * 1000)
+                return result
+        _dbg.debug("_detect_gw_prefix_bold → None (%.0fms)", (time.monotonic() - t0) * 1000)
+        return None
+    except Exception as exc:
+        _dbg.debug("_detect_gw_prefix_bold EXCEPTION: %s (%.0fms)", exc, (time.monotonic() - t0) * 1000)
         return None
 
 

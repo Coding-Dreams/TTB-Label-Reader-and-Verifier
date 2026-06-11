@@ -1,5 +1,6 @@
 import io
 import logging
+import time
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -18,6 +19,9 @@ from app.services.ollama import extract_label_fields
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+# Reuse the debug trace logger from ollama.py
+_dbg = logging.getLogger("debug.trace")
 
 _UPLOAD_DIR = Path("data/uploads")
 _UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -59,14 +63,20 @@ async def extract(
     back_image: Optional[UploadFile] = File(default=None),
     verbose: bool = Query(default=False),
 ):
+    _t0 = time.monotonic()
+    fname = image.filename or "image"
+    _dbg.debug("[/extract] >>>>>>>>>> REQUEST START file=%s", fname)
     tmp = _save_upload(image, "tmp")
     tmp_back: Optional[Path] = None
     try:
         if back_image and back_image.filename:
             tmp_back = _save_upload(back_image, "tmp_back")
-        await log_bus.emit(f"Extract request received — {image.filename or 'image'}")
+        _dbg.debug("[/extract] Files saved, calling extract_label_fields")
+        await log_bus.emit(f"Extract request received — {fname}")
         debug_info: Optional[dict] = {} if verbose else None
-        fields = await extract_label_fields(tmp, tmp_back, debug_info=debug_info)
+        meta: dict = {}
+        fields = await extract_label_fields(tmp, tmp_back, debug_info=debug_info, metadata=meta)
+        _dbg.debug("[/extract] extract_label_fields returned, building response")
         result = fields.model_dump()
         gw = result.get("government_warning")
         result["government_warning_confidence"] = (
@@ -74,24 +84,31 @@ async def extract(
             if gw and gw != "GOVERNMENT WARNING"
             else None
         )
+        result["government_warning_prefix_bold"] = meta.get("government_warning_prefix_bold")
         result["compliance"] = check_compliance(result)
         if verbose and debug_info is not None:
             result["_debug"] = debug_info
+        _dbg.debug("[/extract] Returning JSON response (%.1fs total)", time.monotonic() - _t0)
         return result
     except httpx.TimeoutException:
+        _dbg.debug("[/extract] TIMEOUT EXCEPTION (%.1fs)", time.monotonic() - _t0)
         await log_bus.emit("Error: model timed out")
         raise HTTPException(status_code=504, detail="Model took too long — try again")
     except httpx.ConnectError:
+        _dbg.debug("[/extract] CONNECT ERROR (%.1fs)", time.monotonic() - _t0)
         await log_bus.emit("Error: Ollama service unavailable")
         raise HTTPException(status_code=503, detail="Verification service unavailable — is Ollama running?")
     except Exception as e:
+        _dbg.debug("[/extract] EXCEPTION: %s: %s (%.1fs)", type(e).__name__, e, time.monotonic() - _t0)
         logger.exception("Extraction failed")
         await log_bus.emit("Error: extraction failed — check server logs")
         raise HTTPException(status_code=422, detail="Extraction failed — please try again")
     finally:
+        _dbg.debug("[/extract] finally: deleting temp files")
         tmp.unlink(missing_ok=True)
         if tmp_back:
             tmp_back.unlink(missing_ok=True)
+        _dbg.debug("[/extract] <<<<<<<<<< REQUEST END (%.1fs total)", time.monotonic() - _t0)
 
 
 @router.post("/verify-fields")

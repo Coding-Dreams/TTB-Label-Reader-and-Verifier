@@ -159,6 +159,7 @@
             <div id="gw-info" class="hidden mt-1 flex flex-wrap gap-2 items-center">
               <span id="gw-prefix-badge" class="text-xs font-mono px-2 py-0.5 rounded"></span>
               <span id="gw-confidence-badge" class="text-xs font-semibold px-2 py-0.5 rounded"></span>
+              <span id="gw-bold-badge" class="text-xs font-semibold px-2 py-0.5 rounded"></span>
             </div>
           </div>
           <div>
@@ -166,8 +167,13 @@
             <input id="contains_sulfites" type="text" placeholder="e.g. CONTAINS SULFITES" class="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
           </div>
         </div>
+        <label class="flex items-center gap-2 mt-4 cursor-pointer select-none">
+          <input type="checkbox" id="confirm-label" onchange="refreshButtons()"
+            class="rounded border-gray-300 text-blue-600 focus:ring-blue-500" />
+          <span class="text-sm text-gray-600">I confirm this label's data is correct</span>
+        </label>
         <button id="verify-btn"
-          class="mt-4 w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded disabled:opacity-50"
+          class="mt-2 w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded disabled:opacity-50"
           disabled>
           Verify and Submit
         </button>
@@ -357,8 +363,9 @@
     }
     function refreshButtons() {
       const enabled = hasImage();
+      const confirmed = document.getElementById('confirm-label').checked;
       document.getElementById('extract-btn').disabled = !enabled;
-      document.getElementById('verify-btn').disabled = !enabled;
+      document.getElementById('verify-btn').disabled = !(enabled && confirmed);
     }
     // Resize image to at most 2000 px on the longest side before upload.
     // The VLM cap is 768 px so nothing is lost; this cuts iPhone 12 MP files
@@ -397,10 +404,11 @@
     }
 
     // ---------- Government warning display ----------
-    function updateGwDisplays(gw, confidence) {
+    function updateGwDisplays(gw, confidence, bold) {
       const infoEl   = document.getElementById('gw-info');
       const prefixEl = document.getElementById('gw-prefix-badge');
       const confEl   = document.getElementById('gw-confidence-badge');
+      const boldEl   = document.getElementById('gw-bold-badge');
       if (!gw) { infoEl.classList.add('hidden'); return; }
       infoEl.classList.remove('hidden');
 
@@ -422,6 +430,17 @@
                   : 'bg-red-100 text-red-700';
         confEl.className = 'text-xs font-semibold px-2 py-0.5 rounded ' + col;
       }
+
+      if (bold === true) {
+        boldEl.textContent = 'Prefix bold ✓';
+        boldEl.className = 'text-xs font-semibold px-2 py-0.5 rounded bg-green-100 text-green-700';
+      } else if (bold === false) {
+        boldEl.textContent = 'Prefix bold ✗';
+        boldEl.className = 'text-xs font-semibold px-2 py-0.5 rounded bg-red-100 text-red-700';
+      } else {
+        boldEl.textContent = 'Bold: N/A';
+        boldEl.className = 'text-xs font-semibold px-2 py-0.5 rounded bg-gray-100 text-gray-500';
+      }
     }
 
     // ---------- Field helpers ----------
@@ -430,7 +449,9 @@
         setFieldValue(f, '');
         markField(f, false);
       });
-      updateGwDisplays(null, null);
+      updateGwDisplays(null, null, null);
+      document.getElementById('confirm-label').checked = false;
+      refreshButtons();
     }
     function resetHighlights() {
       FIELDS.forEach(f => markField(f, false));
@@ -472,7 +493,7 @@
             markField(f, true);
           }
         });
-        updateGwDisplays(data.government_warning ?? null, data.government_warning_confidence ?? null);
+        updateGwDisplays(data.government_warning ?? null, data.government_warning_confidence ?? null, data.government_warning_prefix_bold ?? null);
       } catch (err) {
         if (err.name !== 'AbortError') showError(err.message);
       } finally {

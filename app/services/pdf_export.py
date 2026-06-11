@@ -17,6 +17,8 @@ The rest of the form (Plant Registry No, Serial Number, Phone, Email,
 Signature, etc.) is application metadata not present on the label and is
 left blank for the applicant to fill in.
 """
+
+#NOTE: THIS WAS NOT IMPLEMENTED FULLY
 import io
 from pathlib import Path
 from typing import Optional
