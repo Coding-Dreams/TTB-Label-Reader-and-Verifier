@@ -102,7 +102,7 @@ async def verify_fields(
     net_contents: str = Form(default="", max_length=128),
     producer_name_address: str = Form(default="", max_length=1024),
     country_of_origin: str = Form(default="", max_length=128),
-    government_warning: str = Form(default="", max_length=256),
+    government_warning: str = Form(default="", max_length=512),
     contains_sulfites: str = Form(default="", max_length=256),
 ):
     """Verify user-confirmed field values without re-extracting from the image.
@@ -163,7 +163,7 @@ async def verify(
     net_contents: str = Form(default="", max_length=128),
     producer_name_address: str = Form(default="", max_length=1024),
     country_of_origin: str = Form(default="", max_length=128),
-    government_warning: str = Form(default="", max_length=256),
+    government_warning: str = Form(default="", max_length=512),
     contains_sulfites: str = Form(default="", max_length=256),
 ):
     tmp = _save_upload(image, "tmp")
