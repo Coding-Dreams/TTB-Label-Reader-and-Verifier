@@ -52,7 +52,7 @@ Every verification runs a compliance check against the extracted label data. Req
 - Alcohol content (ABV)  
 - Net contents  
 - Producer name and address (US producer, or US importer for imported products)  
-- Government warning statement  
+- Government warning statement (all-caps “GOVERNMENT WARNING” prefix and body text per 27 CFR 16.21; bold formatting shown as informational badge only)  
 - Sulfite declaration (positive or negative) if type is a wine.  
 **Deployment Behind a Reverse Proxy (nginx + Cloudflare)**  
 The included docker-compose.yml can be extended with an nginx service for HTTPS termination. Set APP_PASSWORD and SESSION_SECRET in .env, configure your router to forward ports 80/443 to the host, and point your DNS (e.g., Cloudflare-proxied) at your public IP. The application correctly extracts real client IPs from Cloudflare's CF-Connecting-IP header.  
@@ -65,7 +65,7 @@ Browser
    │  
    ├── POST /extract    → ollama.py   (vision model + Tesseract cascade)  
    ├── POST /verify     → comparator.py + compliance.py  
-   ├── POST /batch/run  → batch.py    (async job, SSE log stream)  
+   ├── POST /batch/save-group → batch.py   (save batch results)  
    │  
    ├── GET  /api/logs/stream → log_bus.py (Server-Sent Events)  
    └── GET  /api/history/{id}/pdf → pdf_export.py (COLA form PDF)  
@@ -73,11 +73,3 @@ Browser
  Storage: SQLite (data/verifications.db)  
  Model:   qwen2.5vl:7b via Ollama (GPU-accelerated)  
  OCR:     Tesseract cascade (orientation correction, upscaling, binarization)  
-   
-**Known Limitations**  
-- **Latency:** GPU strongly recommended to increase label processing speed.  
-- **Supported File Format:** While theoretically all image formats are supported (as images are converted to JPEG for the backend), I have only tested with .png, .jpg, .webp, and .HEIC.  
-- **Decorative fonts:** The vision model may miss fields rendered in circular badges, oval formats, or highly stylized typography. The Extract & Review flow lets reviewers correct bad extractions before verifying.  
-- **Session persistence:** Active sessions are stored in memory and are lost on container restart. Set SESSION_SECRET to a fixed value so the cookie remains valid after restarts (users will need to log in again, but won't get a CSRF error).  
-- **Batch job state:** In-memory only — running batch jobs are lost on server restart.  
-- **History page:** Work in progress; basic record listing is functional.  
