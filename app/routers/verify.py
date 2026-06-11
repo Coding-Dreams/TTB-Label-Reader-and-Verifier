@@ -8,9 +8,10 @@ import httpx
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from PIL import Image
 
+from thefuzz import fuzz
 from app.models.label import LabelFields
 from app.services import log_bus
-from app.services.comparator import compare_label
+from app.services.comparator import compare_label, _CANONICAL_WARNING
 from app.services.compliance import check_compliance
 from app.services.db import save_verification
 from app.services.ollama import extract_label_fields
@@ -67,6 +68,12 @@ async def extract(
         debug_info: Optional[dict] = {} if verbose else None
         fields = await extract_label_fields(tmp, tmp_back, debug_info=debug_info)
         result = fields.model_dump()
+        gw = result.get("government_warning")
+        result["government_warning_confidence"] = (
+            fuzz.ratio(gw.lower(), _CANONICAL_WARNING.lower())
+            if gw and gw != "GOVERNMENT WARNING"
+            else None
+        )
         result["compliance"] = check_compliance(result)
         if verbose and debug_info is not None:
             result["_debug"] = debug_info

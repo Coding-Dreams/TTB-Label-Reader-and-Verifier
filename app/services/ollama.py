@@ -350,10 +350,20 @@ async def extract_label_fields(
             await log_bus.emit("OCR verification: scanning for GOVERNMENT WARNING text")
             gw_ocr = await gw_ocr_future
             if gw_ocr is None:
+                # OCR found no prefix — override VLM to prevent hallucination
                 data["government_warning"] = None
-            elif not data.get("government_warning"):
-                data["government_warning"] = "GOVERNMENT WARNING"
-            # else: OCR confirms presence and VLM extracted full text — keep VLM output
+            else:
+                gw_vlm = data.get("government_warning") or ""
+                if not gw_vlm:
+                    # OCR confirmed presence but VLM returned nothing — use sentinel
+                    data["government_warning"] = "GOVERNMENT WARNING"
+                elif not gw_vlm.startswith("GOVERNMENT WARNING"):
+                    # OCR confirmed the all-caps prefix is on the label; VLM either
+                    # dropped it or returned a mixed-case variant. Strip any mangled
+                    # prefix and prepend the canonical form.
+                    body = _GW_MANGLED_PREFIX_RE.sub("", gw_vlm).strip()
+                    data["government_warning"] = ("GOVERNMENT WARNING: " + body) if body else "GOVERNMENT WARNING"
+                # else: VLM got the prefix right — keep as-is
             gw_final = data.get("government_warning")
             await log_bus.emit(f"  → government warning: {gw_final!r}")
             if debug_info is not None:
@@ -758,6 +768,9 @@ _URL_SUFFIX_RE = re.compile(r'\s+(?:www|http)\.\S+.*$', re.IGNORECASE)
 _DOTTED_ABBREV_RE = re.compile(r'\b([A-Z])\.([A-Z])\.?\s*$')
 # Detects "GOVERNMENT WARNING" with possible line-break between the two words
 _GOVT_WARNING_RE = re.compile(r'GOVERNMENT\s+WARNING')
+# Strips a mangled/mixed-case prefix the VLM sometimes emits instead of the
+# canonical all-caps form (e.g. "Government Warning:", "WARNING:", bare text)
+_GW_MANGLED_PREFIX_RE = re.compile(r'^government\s+warning[:\s]*', re.IGNORECASE)
 # Strict-spelling match — fast happy path for clean OCR output.
 _SULFITE_MENTION_RE = re.compile(r'\bsul(?:f|ph)it', re.IGNORECASE)
 # Candidate-word match: any token starting with 'sul' becomes a candidate for
