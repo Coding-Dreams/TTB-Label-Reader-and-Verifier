@@ -10,7 +10,9 @@ References:
   27 CFR 5   — distilled-spirits labelling
   27 CFR 7   — malt-beverage labelling
 """
+from thefuzz import fuzz
 from typing import Optional
+from app.services.comparator import _CANONICAL_WARNING
 
 
 def _is_blank(v) -> bool:
@@ -51,14 +53,20 @@ def check_compliance(extracted: dict) -> dict:
             })
 
     gw = extracted.get("government_warning")
-    if gw is not None and gw != "GOVERNMENT WARNING":
-        violations.append({
-            "field": "government_warning",
-            "label": "Government warning",
-            "message": (
-                "Government warning must appear in uppercase exactly as 'GOVERNMENT WARNING'"
-            ),
-        })
+    if gw and gw != "GOVERNMENT WARNING":
+        # Full text available: verify all-caps prefix and canonical body text
+        if not gw.startswith("GOVERNMENT WARNING"):
+            violations.append({
+                "field": "government_warning",
+                "label": "Government warning",
+                "message": "Government warning must begin with 'GOVERNMENT WARNING' in all uppercase (27 CFR 16.21)",
+            })
+        elif fuzz.ratio(gw.lower(), _CANONICAL_WARNING.lower()) < 85:
+            violations.append({
+                "field": "government_warning",
+                "label": "Government warning",
+                "message": "Government warning text does not match the required TTB wording (27 CFR 16.21)",
+            })
 
     # Wine-specific: §4.32a requires a sulfite declaration (positive or negative)
     class_type = (extracted.get("class_type") or "").strip().lower()

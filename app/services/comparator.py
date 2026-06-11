@@ -4,7 +4,12 @@ from thefuzz import fuzz
 from app.models.label import LabelFields
 from app.models.result import FieldResult, FieldStatus, VerificationResult
 
-_REQUIRED_WARNING = "GOVERNMENT WARNING"
+_CANONICAL_WARNING = (
+    "GOVERNMENT WARNING: (1) According to the Surgeon General, women should not drink "
+    "alcoholic beverages during pregnancy because of the risk of birth defects. "
+    "(2) Consumption of alcoholic beverages impairs your ability to drive a car or "
+    "operate machinery, and may cause health problems."
+)
 
 # Matches negation words that turn a sulfite mention into a "no sulfites" statement
 _SULFITE_ABSENT_RE = re.compile(
@@ -39,12 +44,37 @@ def check_government_warning(
             extracted_value=None,
             submitted_value=submitted,
         )
-    passes = extracted == _REQUIRED_WARNING
+    # Prefix must be exactly "GOVERNMENT WARNING" in all-caps (27 CFR 16.21)
+    if not extracted.startswith("GOVERNMENT WARNING"):
+        return FieldResult(
+            field="government_warning",
+            status=FieldStatus.FAIL,
+            extracted_value=extracted,
+            submitted_value=submitted,
+        )
+    # Sentinel: OCR confirmed presence but full body text was not captured —
+    # flag for human review rather than auto-failing.
+    if extracted == "GOVERNMENT WARNING":
+        return FieldResult(
+            field="government_warning",
+            status=FieldStatus.WARN,
+            extracted_value=extracted,
+            submitted_value=submitted,
+        )
+    # Full text available: fuzzy-match against submitted (case-insensitive)
+    score = fuzz.ratio(extracted.lower(), submitted.lower())
+    if score >= 90:
+        status = FieldStatus.PASS
+    elif score >= 75:
+        status = FieldStatus.WARN
+    else:
+        status = FieldStatus.FAIL
     return FieldResult(
         field="government_warning",
-        status=FieldStatus.PASS if passes else FieldStatus.FAIL,
+        status=status,
         extracted_value=extracted,
         submitted_value=submitted,
+        score=float(score),
     )
 
 

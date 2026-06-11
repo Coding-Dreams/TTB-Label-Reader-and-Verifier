@@ -83,7 +83,7 @@ Rules:
 - producer_name_address: the winery, distillery, brewery, or bottler that made or bottled this product, with their address. For DOMESTIC US products this is the US producer/bottler (e.g. "BIG EASY BLENDS LLC, KENNER, LA"). For IMPORTED products put only the FOREIGN producer here (e.g. "CHATEAU DUPONT, BORDEAUX, FRANCE") — do NOT put the US importer here, use us_importer for that
 - us_importer: for IMPORTED products only — the US IMPORTER, BOTTLER, or DISTRIBUTOR with a United States city and state; look for phrases like "IMPORTED BY:", "SOLE IMPORTER:", "IMPORTED AND BOTTLED BY:", "DISTRIBUTED BY:" followed by a US company name and address (e.g. "IMPORTED BY: ACME SPIRITS, MIAMI, FL"); null for domestic US products or if no US importer is listed
 - country_of_origin: the country name, but ONLY if explicitly stated as the product's origin (e.g. "Product of Canada", "Made in Germany", "Imported from France"). Do NOT infer from the beverage category or style name — "American Red Wine" does NOT mean country_of_origin is "United States". US territories (Puerto Rico, Guam, US Virgin Islands, American Samoa, Northern Mariana Islands) are part of the United States — treat them exactly like any US state and leave country_of_origin null for products made there
-- government_warning: return exactly "GOVERNMENT WARNING" (those two words, all uppercase) if the label contains that phrase in all uppercase letters; otherwise null. Do NOT copy the warning body text and IGNORE the warning body text. ONLY focus on the GOVERNMENT WARNING.
+- government_warning: if the label contains "GOVERNMENT WARNING" in all uppercase letters, return the complete government warning text exactly as it appears on the label (including the "GOVERNMENT WARNING:" prefix and all body text); otherwise null
 
 Example output for an imported cognac label:
 {
@@ -95,7 +95,7 @@ Example output for an imported cognac label:
   "producer_name_address": "H. MOUNIER, JARNAC, FRANCE",
   "us_importer": "IMPORTED BY: SIDNEY FRANK IMPORTING CO., INC., NEW ROCHELLE, NY 10801",
   "country_of_origin": "France",
-  "government_warning": "GOVERNMENT WARNING"
+  "government_warning": "GOVERNMENT WARNING: (1) ACCORDING TO THE SURGEON GENERAL, WOMEN SHOULD NOT DRINK ALCOHOLIC BEVERAGES DURING PREGNANCY BECAUSE OF THE RISK OF BIRTH DEFECTS. (2) CONSUMPTION OF ALCOHOLIC BEVERAGES IMPAIRS YOUR ABILITY TO DRIVE A CAR OR OPERATE MACHINERY, AND MAY CAUSE HEALTH PROBLEMS."
 }"""
 
 
@@ -342,16 +342,22 @@ async def extract_label_fields(
                     data["producer_name_address"] = cleaned or importer
                 await log_bus.emit(f"  → US importer: {importer!r}")
 
-            # OCR-based government_warning: exact uppercase check overrides VLM output.
-            # Prevents both false positives (model normalises lowercase text to uppercase)
-            # and false negatives (model misses small-print text the OCR can still read).
-            # Dispatched after _postprocess and overlapped with the VLM secondary passes.
+            # OCR-based government_warning gate: OCR is the authoritative presence detector.
+            # - OCR absent  → override VLM with None (prevents hallucination)
+            # - OCR present + VLM has full text → keep VLM's full text for comparison
+            # - OCR present + VLM missed it     → fall back to sentinel so comparator
+            #   knows the warning exists even without the body text
             await log_bus.emit("OCR verification: scanning for GOVERNMENT WARNING text")
             gw_ocr = await gw_ocr_future
-            data["government_warning"] = gw_ocr
-            await log_bus.emit(f"  → government warning: {gw_ocr!r}")
+            if gw_ocr is None:
+                data["government_warning"] = None
+            elif not data.get("government_warning"):
+                data["government_warning"] = "GOVERNMENT WARNING"
+            # else: OCR confirms presence and VLM extracted full text — keep VLM output
+            gw_final = data.get("government_warning")
+            await log_bus.emit(f"  → government warning: {gw_final!r}")
             if debug_info is not None:
-                debug_info["secondary"]["government_warning"] = {"raw": gw_ocr, "accepted": gw_ocr}
+                debug_info["secondary"]["government_warning"] = {"raw": gw_ocr, "accepted": gw_final}
 
             # OCR-based sulfite gate — only applied to NON-WINE class types.
             # Per 27 CFR 4.32a, wines essentially always carry a sulfite declaration
@@ -852,7 +858,9 @@ def _detect_government_warning_ocr(image_path: Path, back_image_path: Optional[P
             rgb = ImageOps.exif_transpose(Image.open(path)).convert("RGB")
             gray = rgb.convert("L")
             up2 = gray.resize((gray.width * 2, gray.height * 2), Image.LANCZOS)
-            prepared.append({"rgb": rgb, "gray": gray, "up2": up2})
+            ac = ImageOps.autocontrast(gray, cutoff=2)
+            ac_up2 = ac.resize((ac.width * 2, ac.height * 2), Image.LANCZOS)
+            prepared.append({"rgb": rgb, "gray": gray, "up2": up2, "ac": ac, "ac_up2": ac_up2})
         if not prepared:
             return None
 
@@ -864,6 +872,10 @@ def _detect_government_warning_ocr(image_path: Path, back_image_path: Optional[P
                 (p["up2"], ""),
                 (p["up2"], "--psm 6"),
                 (p["gray"], "--psm 12"),
+                # autocontrast stretches the brightness range — catches textured
+                # backgrounds (e.g. wood grain) where plain grayscale fails
+                (p["ac_up2"], ""),
+                (p["ac_up2"], "--psm 6"),
             ])
         if _any_match_parallel(tier1):
             return "GOVERNMENT WARNING"
