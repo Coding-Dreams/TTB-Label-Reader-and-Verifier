@@ -1,6 +1,6 @@
 # TTB Label Verification
 
-AI-powered alcohol label verification prototype for the Alcohol and Tobacco Tax and Trade Bureau (TTB). Extracts fields from label images using a local vision model (qwen2.5vl:7b via Ollama) combined with a Tesseract OCR cascade, then compares them against applicant-submitted application data and checks TTB regulatory compliance (27 CFR 4/5/7).
+AI-powered alcohol label verification prototype for the Alcohol and Tobacco Tax and Trade Bureau (TTB). Extracts fields from label images using a local vision model (qwen2.5vl:7b via Ollama) combined with a Tesseract OCR cascade, then compares them against applicant-submitted application data and checks TTB regulatory compliance.
 
 ## Requirements
 
@@ -75,7 +75,7 @@ Every verification runs a compliance check against the extracted label data. Req
 - Alcohol content (ABV)
 - Net contents
 - Producer name and address (US producer, or US importer for imported products)
-- Government warning statement (all-caps "GOVERNMENT WARNING" prefix and body text per 27 CFR 16.21; bold formatting shown as informational badge only)
+- Government warning statement (all-caps "GOVERNMENT WARNING" prefix and body text; bold formatting shown as informational badge only)
 - Sulfite declaration (positive or negative) if type is a wine
 
 ## Deployment Behind a Reverse Proxy (nginx + Cloudflare)
