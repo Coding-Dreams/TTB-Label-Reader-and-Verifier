@@ -4,12 +4,13 @@ import logging
 import time
 from collections import defaultdict
 from threading import Lock
+from typing import Optional
 
 from fastapi import FastAPI, Form, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, RedirectResponse, Response, StreamingResponse
-from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request as StarletteRequest
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.routers import verify, batch
 from app.services import auth, log_bus
@@ -22,17 +23,10 @@ app = FastAPI(title="TTB Label Verification")
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Shared helper — real client IP
+# Shared helpers
 # ---------------------------------------------------------------------------
 def _real_ip(request: StarletteRequest) -> str:
-    """Return the real client IP behind Cloudflare + NGINX.
-
-    Priority:
-      1. CF-Connecting-IP  — set by Cloudflare to the true client IP
-      2. X-Forwarded-For   — first entry is the client when set by a trusted proxy
-      3. X-Real-IP         — set by NGINX, but equals Cloudflare's edge IP (not the client)
-      4. Socket address    — direct connection (no proxy)
-    """
+    """Real client IP for route handlers (uses Request object)."""
     return (
         request.headers.get("CF-Connecting-IP")
         or request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
@@ -41,8 +35,28 @@ def _real_ip(request: StarletteRequest) -> str:
     )
 
 
+def _real_ip_from_scope(scope: dict) -> str:
+    """Real client IP for pure-ASGI middleware (uses scope headers directly)."""
+    headers = dict(scope.get("headers", []))
+    return (
+        headers.get(b"cf-connecting-ip", b"").decode()
+        or headers.get(b"x-forwarded-for", b"").decode().split(",")[0].strip()
+        or headers.get(b"x-real-ip", b"").decode()
+        or (scope.get("client") or ("unknown", 0))[0]
+    )
+
+
+def _parse_cookies(cookie_header: str) -> dict:
+    cookies: dict = {}
+    for part in cookie_header.split(";"):
+        name, _, value = part.strip().partition("=")
+        if name.strip():
+            cookies[name.strip()] = value.strip()
+    return cookies
+
+
 # ---------------------------------------------------------------------------
-# Security headers — applied to every response
+# Security headers — pure ASGI, safe for SSE streaming
 # ---------------------------------------------------------------------------
 _CSP = (
     "default-src 'self'; "
@@ -56,134 +70,220 @@ _CSP = (
     "frame-ancestors 'none'"
 )
 
-class _SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: StarletteRequest, call_next):
-        response = await call_next(request)
-        response.headers["Content-Security-Policy"] = _CSP
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
-        response.headers["X-XSS-Protection"] = "1; mode=block"
-        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        return response
+_SECURITY_HEADERS = [
+    (b"content-security-policy",       _CSP.encode()),
+    (b"x-content-type-options",        b"nosniff"),
+    (b"x-frame-options",               b"DENY"),
+    (b"x-xss-protection",              b"1; mode=block"),
+    (b"referrer-policy",               b"strict-origin-when-cross-origin"),
+]
+
+
+class _SecurityHeadersMiddleware:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_headers(message: dict) -> None:
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers", []))
+                headers.extend(_SECURITY_HEADERS)
+                message = {**message, "headers": headers}
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
+
 
 # ---------------------------------------------------------------------------
-# Body size pre-check
+# Body size pre-check — pure ASGI
 # ---------------------------------------------------------------------------
 _MAX_BODY_BYTES = 50 * 1024 * 1024  # 50 MB
 
-class _BodySizeLimitMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: StarletteRequest, call_next):
-        cl = request.headers.get("content-length")
+
+class _BodySizeLimitMiddleware:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        headers = dict(scope.get("headers", []))
+        cl = headers.get(b"content-length")
         if cl:
             try:
                 if int(cl) > _MAX_BODY_BYTES:
-                    return Response(
+                    resp = Response(
                         content='{"detail":"Request body too large — maximum 50 MB"}',
                         status_code=413,
                         media_type="application/json",
                     )
+                    await resp(scope, receive, send)
+                    return
             except ValueError:
                 pass
-        return await call_next(request)
+        await self.app(scope, receive, send)
+
 
 # ---------------------------------------------------------------------------
-# Rate limiting — per real client IP on write endpoints
+# Rate limiting — pure ASGI
 # ---------------------------------------------------------------------------
 _RATE_LIMIT_PATHS = {"/extract", "/verify", "/verify-fields", "/batch/save-group"}
-_RATE_WINDOW = 60   # seconds
-_RATE_MAX = 600     # requests per window
+_RATE_WINDOW = 60    # seconds
+_RATE_MAX    = 600   # requests per window
 
-class _RateLimitMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app):
-        super().__init__(app)
+
+class _RateLimitMiddleware:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
         self._counts: dict[str, list[float]] = defaultdict(list)
         self._lock = Lock()
 
-    async def dispatch(self, request: StarletteRequest, call_next):
-        if request.url.path in _RATE_LIMIT_PATHS:
-            ip = _real_ip(request)
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        if scope["path"] in _RATE_LIMIT_PATHS:
+            ip  = _real_ip_from_scope(scope)
             now = time.monotonic()
             with self._lock:
                 stamps = self._counts[ip]
                 self._counts[ip] = [t for t in stamps if now - t < _RATE_WINDOW]
                 if len(self._counts[ip]) >= _RATE_MAX:
-                    return Response(
+                    resp = Response(
                         content='{"detail":"Rate limit exceeded — please wait before trying again"}',
                         status_code=429,
                         media_type="application/json",
                     )
+                    await resp(scope, receive, send)
+                    return
                 self._counts[ip].append(now)
-        return await call_next(request)
+        await self.app(scope, receive, send)
+
 
 # ---------------------------------------------------------------------------
-# Authentication — session cookie gate
+# Authentication — pure ASGI
 # ---------------------------------------------------------------------------
-class _AuthMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: StarletteRequest, call_next):
+class _AuthMiddleware:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
         if not auth.auth_enabled():
-            return await call_next(request)
-        path = request.url.path
+            await self.app(scope, receive, send)
+            return
+        path = scope["path"]
         if path == "/login" or path.startswith("/static/"):
-            return await call_next(request)
-        token = request.cookies.get(auth.COOKIE_NAME)
+            await self.app(scope, receive, send)
+            return
+        headers = dict(scope.get("headers", []))
+        cookies = _parse_cookies(headers.get(b"cookie", b"").decode())
+        token   = cookies.get(auth.COOKIE_NAME)
         if not auth.verify_session_token(token):
-            if path.startswith("/api/") or request.method not in ("GET", "HEAD"):
-                return Response(
+            method = scope["method"]
+            if path.startswith("/api/") or method not in ("GET", "HEAD"):
+                resp = Response(
                     content='{"detail":"Unauthorized"}',
                     status_code=401,
                     media_type="application/json",
                 )
-            return RedirectResponse("/login", status_code=303)
-        return await call_next(request)
+            else:
+                resp = RedirectResponse("/login", status_code=303)
+            await resp(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
 
 
 # ---------------------------------------------------------------------------
-# CSRF protection — all non-GET/HEAD requests from authenticated users must
-# carry a valid CSRF token (except /login which has no session yet).
-# Token is checked from the X-CSRF-Token header (fetch requests) or the
-# _csrf_token form field (HTML form submissions).
+# CSRF protection — pure ASGI
+# For url-encoded forms (e.g. /logout) we buffer the body, extract the token,
+# then replay the body so the downstream handler can still read it.
 # ---------------------------------------------------------------------------
 _CSRF_EXEMPT = {"/login"}
 
-class _CsrfMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: StarletteRequest, call_next):
+
+class _CsrfMiddleware:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
         if not auth.auth_enabled():
-            return await call_next(request)
-        if request.method in ("GET", "HEAD", "OPTIONS"):
-            return await call_next(request)
-        if request.url.path in _CSRF_EXEMPT:
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
+        method = scope["method"]
+        if method in ("GET", "HEAD", "OPTIONS"):
+            await self.app(scope, receive, send)
+            return
+        if scope["path"] in _CSRF_EXEMPT:
+            await self.app(scope, receive, send)
+            return
 
-        session_token = request.cookies.get(auth.COOKIE_NAME)
+        headers      = dict(scope.get("headers", []))
+        cookies      = _parse_cookies(headers.get(b"cookie", b"").decode())
+        session_token = cookies.get(auth.COOKIE_NAME)
         if not session_token:
-            return await call_next(request)  # auth middleware will reject
+            # No session — auth middleware will reject; pass through
+            await self.app(scope, receive, send)
+            return
 
-        # Accept CSRF token from X-CSRF-Token header (JS fetch calls) or from
-        # a _csrf_token form field (plain HTML form submissions like logout).
-        # IMPORTANT: only parse the body for url-encoded forms — parsing
-        # multipart/form-data here consumes the upload stream and breaks
-        # downstream file handling in FastAPI route handlers.
-        csrf_token = request.headers.get("X-CSRF-Token")
+        csrf_token: str = headers.get(b"x-csrf-token", b"").decode().strip()
+        buffered_body: Optional[bytes] = None
+
         if not csrf_token:
-            content_type = request.headers.get("content-type", "")
+            content_type = headers.get(b"content-type", b"").decode()
             if "application/x-www-form-urlencoded" in content_type:
-                form = await request.form()
-                csrf_token = form.get("_csrf_token")
+                chunks: list[bytes] = []
+                more = True
+                while more:
+                    msg  = await receive()
+                    chunks.append(msg.get("body", b""))
+                    more = msg.get("more_body", False)
+                buffered_body = b"".join(chunks)
+                from urllib.parse import parse_qs
+                form_data  = parse_qs(buffered_body.decode(errors="replace"))
+                csrf_token = (form_data.get("_csrf_token") or [""])[0]
 
         if not auth.verify_csrf_token(session_token, csrf_token):
-            if request.headers.get("accept", "").startswith("text/html"):
-                return RedirectResponse("/login", status_code=303)
-            return Response(
-                content='{"detail":"CSRF validation failed"}',
-                status_code=403,
-                media_type="application/json",
-            )
-        return await call_next(request)
+            accept = headers.get(b"accept", b"").decode()
+            if accept.startswith("text/html"):
+                resp: Response = RedirectResponse("/login", status_code=303)
+            else:
+                resp = Response(
+                    content='{"detail":"CSRF validation failed"}',
+                    status_code=403,
+                    media_type="application/json",
+                )
+            await resp(scope, receive, send)
+            return
+
+        if buffered_body is not None:
+            # Replay the buffered body so the downstream handler can read it
+            replayed = False
+
+            async def replay_receive() -> dict:
+                nonlocal replayed
+                if not replayed:
+                    replayed = True
+                    return {"type": "http.request", "body": buffered_body, "more_body": False}
+                return await receive()
+
+            await self.app(scope, replay_receive, send)
+        else:
+            await self.app(scope, receive, send)
 
 
 # Middleware is applied innermost-first: security headers wrap everything,
-# rate limiter is next, body size check is next, CSRF is next, auth gate is
-# outermost (runs first on requests).
+# rate limiter is next, body size check is next, CSRF is next, auth is outermost.
 app.add_middleware(_SecurityHeadersMiddleware)
 app.add_middleware(_RateLimitMiddleware)
 app.add_middleware(_BodySizeLimitMiddleware)
@@ -204,7 +304,7 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 
 # ---------------------------------------------------------------------------
-# CSRF token endpoint — JS calls this to get a token for fetch requests
+# CSRF token endpoint
 # ---------------------------------------------------------------------------
 @app.get("/api/csrf-token")
 def get_csrf_token(request: StarletteRequest):
@@ -239,7 +339,7 @@ async def login(request: StarletteRequest, password: str = Form(...)):
         httponly=True,
         samesite="lax",
         secure=True,
-        max_age=86400 * 30,  # 30 days
+        max_age=86400 * 30,
     )
     return response
 
@@ -280,11 +380,10 @@ def get_single(verification_id: int):
 @app.get("/api/logs/stream")
 async def stream_logs(request: StarletteRequest):
     q = log_bus.subscribe()
+
     async def generate():
         try:
             while True:
-                if await request.is_disconnected():
-                    break
                 try:
                     msg = await asyncio.wait_for(q.get(), timeout=20.0)
                     yield f"data: {msg}\n\n"
@@ -292,6 +391,7 @@ async def stream_logs(request: StarletteRequest):
                     yield ": keepalive\n\n"
         finally:
             log_bus.unsubscribe(q)
+
     return StreamingResponse(
         generate(),
         media_type="text/event-stream",

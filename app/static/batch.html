@@ -534,8 +534,8 @@
                 ? `<span class="text-xs font-mono px-1.5 py-0.5 rounded bg-green-100 text-green-700">GOVERNMENT WARNING ✓</span>`
                 : `<span class="text-xs font-mono px-1.5 py-0.5 rounded bg-red-100 text-red-700">Prefix incorrect ✗</span>`;
               const col = conf == null ? 'bg-gray-100 text-gray-400'
-                        : conf >= 90  ? 'bg-green-100 text-green-700'
-                        : conf >= 75  ? 'bg-yellow-100 text-yellow-700'
+                        : conf >= 98  ? 'bg-green-100 text-green-700'
+                        : conf >= 95  ? 'bg-yellow-100 text-yellow-700'
                         : 'bg-red-100 text-red-700';
               const confBadge = `<span class="text-xs font-semibold px-1.5 py-0.5 rounded ${col}">${conf != null ? conf + '% body match' : 'Body text: N/A'}</span>`;
               extra = `<div class="flex flex-wrap gap-1.5 mt-1">${prefixBadge}${confBadge}</div>`;

@@ -397,8 +397,11 @@ async def extract_label_fields(
                     }
                 data["contains_sulfites"] = None
 
-            await log_bus.emit("Extraction complete")
-            return LabelFields(**data)
+        # async with httpx.AsyncClient exits here — connections close before we
+        # emit "Extraction complete", so the HTTP response goes out immediately
+        # after the log message with no additional teardown delay.
+        await log_bus.emit("Extraction complete")
+        return LabelFields(**data)
     finally:
         if stitched:
             stitched.unlink(missing_ok=True)
